@@ -4,8 +4,10 @@ import { readManifest, updateBatchStatus, updatePhaseStatus } from '../manifest.
 import { callLMStudio } from '../lm-studio.js';
 import { withRetry } from '../retry.js';
 import { indexPrompt } from '../prompts/templates.js';
+import { getFileStructure } from '../gitnexus.js';
 import type { Logger } from '../logger.js';
 import type { IndexOutput } from '../types.js';
+import type { GitNexusContext } from '../gitnexus.js';
 
 const MAX_ATTEMPTS = 3;
 
@@ -113,6 +115,7 @@ export async function runIndexPhase(
   timeoutMs?: number,
   numCtx?: number,
   signal?: AbortSignal,
+  gitNexusCtx?: GitNexusContext | null,
 ): Promise<void> {
   updatePhaseStatus(projectRoot, 'index', 'pending');
 
@@ -144,7 +147,12 @@ export async function runIndexPhase(
       continue;
     }
 
-    const prompt = indexPrompt(fileContents);
+    // Pre-fetch structural data from GitNexus if available
+    const graphData = gitNexusCtx
+      ? await getFileStructure(gitNexusCtx, batch.files)
+      : null;
+
+    const prompt = indexPrompt(fileContents, graphData);
     const estTokens = Math.ceil(prompt.length / 3.5);
     const ctxForEstimate = numCtx ?? 32000;
     if (estTokens > ctxForEstimate * 0.75) {
@@ -154,10 +162,24 @@ export async function runIndexPhase(
     const result = await withRetry(
       async () => {
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, 1500);
-        const parsed = JSON.parse(extractJsonArray(raw));
+        const parsed = JSON.parse(extractJsonArray(raw)) as Partial<IndexOutput>[];
+
+        // Merge graph-sourced structural fields back into each item
+        // data_flow is intentionally omitted — import paths are not data flow descriptions;
+        // leave it for the LLM to infer from file contents
+        const enriched: IndexOutput[] = parsed.map(item => {
+          const posixModule = (item.module ?? '').replace(/\\/g, '/');
+          const structure = graphData?.get(posixModule);
+          if (!structure) return item as IndexOutput;
+          return {
+            ...item,
+            dependencies: structure.imports,
+          } as IndexOutput;
+        });
+
         mkdirSync(join(projectRoot, 'code-analysis', 'index'), { recursive: true });
-        writeFileSync(join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2), 'utf8');
-        return parsed;
+        writeFileSync(join(projectRoot, batch.output_file), JSON.stringify(enriched, null, 2), 'utf8');
+        return enriched;
       },
       MAX_ATTEMPTS,
       (attempt, err) => {
