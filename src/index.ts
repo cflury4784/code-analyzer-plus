@@ -13,6 +13,11 @@ import { DEFAULT_MODEL } from './models.js';
 import { ensureModelReady, resolveLoadedIdentifier } from './preflight.js';
 import { runUsesModel } from './run-plan.js';
 import { join } from 'path';
+import { existsSync } from 'fs';
+import { spawn } from 'child_process';
+import * as readline from 'readline';
+import { openGitNexus, closeGitNexus } from './gitnexus.js';
+import type { GitNexusContext } from './gitnexus.js';
 
 const args = minimist(process.argv.slice(2), {
   string: ['phase', 'model-override'],
@@ -55,6 +60,63 @@ const handleSignal = (sig: string) => {
 process.once('SIGINT', () => handleSignal('SIGINT'));
 process.once('SIGTERM', () => handleSignal('SIGTERM'));
 
+function spawnAsync(cmd: string, args: string[], opts: { cwd: string; shell: boolean }): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, { ...opts, stdio: 'inherit' });
+    proc.on('close', resolve);
+    proc.on('error', reject);
+  });
+}
+
+async function detectGitNexus(projectRoot: string, logger: ReturnType<typeof createLogger>): Promise<GitNexusContext | null> {
+  const dbPath = join(projectRoot, '.gitnexus');
+
+  if (!existsSync(dbPath)) {
+    console.log(
+      '\n\u26A0  GitNexus index not found.\n' +
+      '   Run: npx gitnexus analyze\n' +
+      '   This enables smarter batching and faster, more accurate results.\n',
+    );
+    if (!process.stdin.isTTY) {
+      logger.info('Non-TTY stdin detected — continuing without GitNexus');
+      return null;
+    }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise<string>(resolve => {
+      rl.question('Continue without GitNexus? [y/N] ', resolve);
+    });
+    rl.close();
+    if (answer.trim().toLowerCase() !== 'y') {
+      process.exit(0);
+    }
+    return null;
+  }
+
+  // .gitnexus exists — update the index first (async spawn, does not block event loop)
+  logger.info('GitNexus index found — running npx gitnexus analyze to refresh');
+  try {
+    const exitCode = await spawnAsync('npx', ['gitnexus', 'analyze'], {
+      cwd: projectRoot,
+      shell: true,
+    });
+    if (exitCode !== 0) {
+      logger.warn('npx gitnexus analyze exited non-zero — skipping GitNexus enrichment', {
+        code: exitCode,
+      });
+      return null;
+    }
+  } catch {
+    logger.warn('npx gitnexus analyze failed to spawn — skipping enrichment');
+    return null;
+  }
+
+  const ctx = await openGitNexus(projectRoot);
+  if (!ctx) {
+    logger.warn('GitNexus schema probe failed or DB locked — skipping enrichment');
+  }
+  return ctx;
+}
+
 async function main() {
   const hasManifest = manifestExists(projectRoot);
 
@@ -69,6 +131,12 @@ async function main() {
     logger.info(`Phase ${phase} reset`);
   }
 
+  // GitNexus enrichment — optional, falls back to existing behaviour if null
+  const gitNexusCtx: GitNexusContext | null = await detectGitNexus(projectRoot, logger);
+  // Register cleanup so DB file lock is released on normal exit and unhandled rejection
+  process.once('exit', () => { if (gitNexusCtx) closeGitNexus(gitNexusCtx); });
+  process.once('uncaughtException', (e) => { if (gitNexusCtx) closeGitNexus(gitNexusCtx); throw e; });
+
   // LM Studio preflight — only when the run actually uses the model (skips aggregate-only runs).
   if (runUsesModel(phase) && !skipPreflight) {
     await ensureModelReady(model, numCtx, logger);
@@ -78,7 +146,7 @@ async function main() {
     const m = readManifest(projectRoot);
     if (m.phases.index !== 'completed') {
       const resolvedModel = await resolveLoadedIdentifier(model, numCtx, logger, { readOnly: skipPreflight });
-      await runIndexPhase(projectRoot, resolvedModel, logger, undefined, timeoutMs, numCtx, runController.signal);
+      await runIndexPhase(projectRoot, resolvedModel, logger, undefined, timeoutMs, numCtx, runController.signal, gitNexusCtx);
     }
     if (readManifest(projectRoot).phases.index === 'failed') {
       logger.error('Phase 1 failed — halting');
@@ -90,7 +158,7 @@ async function main() {
     const m = readManifest(projectRoot);
     if (m.phases.analyze !== 'completed') {
       const resolvedModel = await resolveLoadedIdentifier(model, numCtx, logger, { readOnly: skipPreflight });
-      await runAnalyzePhase(projectRoot, resolvedModel, logger, undefined, timeoutMs, numCtx, runController.signal);
+      await runAnalyzePhase(projectRoot, resolvedModel, logger, undefined, timeoutMs, numCtx, runController.signal, gitNexusCtx);
     }
     if (readManifest(projectRoot).phases.analyze === 'failed') {
       logger.error('Phase 2 failed — halting');
@@ -126,7 +194,7 @@ async function main() {
     const m = readManifest(projectRoot);
     if (m.phases.refactor !== 'completed') {
       const resolvedModel = await resolveLoadedIdentifier(model, numCtx, logger, { readOnly: skipPreflight });
-      await runRefactorPhase(projectRoot, resolvedModel, logger, undefined, timeoutMs, numCtx, runController.signal);
+      await runRefactorPhase(projectRoot, resolvedModel, logger, undefined, timeoutMs, numCtx, runController.signal, gitNexusCtx);
     }
   }
 
