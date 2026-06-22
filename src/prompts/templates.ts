@@ -181,10 +181,11 @@ No-violations entry:
 }
 
 Rules:
-- For "before" and "after": quote verbatim lines from File Contents below. Do NOT paraphrase or invent code.
-- Set "before_lines" to the 1-indexed line range you are quoting (e.g. "47-52").
-- If you cannot locate the exact lines, set before_lines to "NEEDS_VERIFICATION".
+- For "before": quote at most 5 verbatim lines from File Contents. If the change spans more lines, quote only the 2-3 most representative lines and use "..." for omitted content. Do NOT quote entire functions.
+- For "after": show only the changed lines (same 5-line limit). Do NOT rewrite the whole function.
+- Set "before_lines" to the 1-indexed line range (e.g. "47-52"). Use "NEEDS_VERIFICATION" if unsure.
 - For files with no standards violations, use the no-violations entry format.
+- Maximum 3 plan entries per file. Pick the highest-impact violations only.
 Return ONLY a JSON array.
 
 Standards:

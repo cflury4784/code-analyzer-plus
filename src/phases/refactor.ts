@@ -22,7 +22,11 @@ function safeMaxTokens(promptLen: number, numCtx: number, cap: number): number {
 }
 
 const VALID_ESCAPES = new Set(['"', "'", '\\', '/', 'b', 'f', 'n', 'r', 't', 'u']);
-const JSON_STRUCTURAL = new Set([',', '}', ']', ':', '"', "'", '\n', '\r']);
+// Only unambiguous JSON structural characters — do NOT include '"' or "'" here.
+// Source code contains patterns like `if (ch === '"') {` or `split("")` where a
+// quote is immediately followed by another quote or single-quote, and the lookahead
+// would incorrectly close the outer string if those characters were in this set.
+const JSON_STRUCTURAL = new Set([',', '}', ']', ':', '\n', '\r']);
 
 // Return the first non-whitespace char at or after position j in s, or '' if none.
 function peekNonWs(s: string, j: number): string {
@@ -242,7 +246,18 @@ export async function runRefactorPhase(
         const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
         logger.debug(`${batch.id} raw`, { preview: raw.slice(0, 300) });
-        const parsed = JSON.parse(sanitizeRaw(raw)) as RefactorPlanEntry[];
+        const sanitized = sanitizeRaw(raw);
+        let parsed: RefactorPlanEntry[];
+        try {
+          parsed = JSON.parse(sanitized) as RefactorPlanEntry[];
+        } catch (parseErr) {
+          const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+          const posMatch = msg.match(/position (\d+)/);
+          const pos = posMatch ? parseInt(posMatch[1], 10) : sanitized.length;
+          const snippet = sanitized.slice(Math.max(0, pos - 120), pos + 120);
+          logger.warn(`${batch.id} parse failure context`, { pos, snippet });
+          throw parseErr;
+        }
         if (parsed.length === 0) {
           parsed.push({
             file: moduleItems.map(m => m.module).join(', ') || batch.id,

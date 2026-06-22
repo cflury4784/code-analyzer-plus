@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **code-analyzer+** (708 symbols, 886 relationships, 15 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **code-analyzer-plus** (720 symbols, 902 relationships, 16 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -24,10 +24,10 @@ This project is indexed by GitNexus as **code-analyzer+** (708 symbols, 886 rela
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/code-analyzer+/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/code-analyzer+/clusters` | All functional areas |
-| `gitnexus://repo/code-analyzer+/processes` | All execution flows |
-| `gitnexus://repo/code-analyzer+/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/code-analyzer-plus/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/code-analyzer-plus/clusters` | All functional areas |
+| `gitnexus://repo/code-analyzer-plus/processes` | All execution flows |
+| `gitnexus://repo/code-analyzer-plus/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
