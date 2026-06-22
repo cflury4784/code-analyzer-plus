@@ -9,7 +9,7 @@
     "README.md"
   ],
   "bin": {
-    "code-analyzer": "./dist/src/index.js"
+    "gitnexus": "./dist/src/index.js"
   },
   "scripts": {
     "build": "tsc",
