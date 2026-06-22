@@ -1,7 +1,9 @@
+// src/lms-rest.ts
 import { runLms, estimateTotalGB } from './lms.js';
 import type { LoadedModel, LoadOpts, RunLms, Lms } from './lms.js';
+import { makeAbortPair, readLMSRestConfig } from './llm-client.js';
 
-const API_BASE = 'http://localhost:1234/api/v1';
+const _restDefaults = readLMSRestConfig();
 
 interface ApiInstance {
   id: string;
@@ -17,12 +19,11 @@ interface ApiModel {
 async function apiFetch(
   path: string,
   init: RequestInit = {},
-  timeoutMs = 10_000,
+  timeoutMs = _restDefaults.timeoutMs,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const { controller, cleanup } = makeAbortPair(timeoutMs);
   try {
-    return await fetch(`${API_BASE}${path}`, {
+    return await fetch(`${_restDefaults.baseUrl}${path}`, {
       ...init,
       headers: { 'Content-Type': 'application/json', ...init.headers as Record<string, string> },
       signal: controller.signal,
@@ -33,7 +34,7 @@ async function apiFetch(
     }
     throw err;
   } finally {
-    clearTimeout(timer);
+    cleanup();
   }
 }
 
@@ -48,7 +49,7 @@ export async function serverStatus(
   _deps?: { runLms: RunLms },
 ): Promise<{ running: boolean; port: number }> {
   try {
-    const res = await apiFetch('/models', {}, 3000);
+    const res = await apiFetch('/models', {}, 3_000);
     return { running: res.ok, port: 1234 };
   } catch {
     return { running: false, port: 0 };
@@ -97,14 +98,14 @@ export async function unloadAll(_deps?: { runLms: RunLms }): Promise<void> {
   );
 }
 
-const DEFAULT_LOAD_TIMEOUT_MS = 10 * 60 * 1000;
-
 export async function load(
   loadKey: string,
   opts: LoadOpts,
   _deps?: { runLms: RunLms },
 ): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS;
+  // Load timeout override chain: opts.timeoutMs → LMS_LOAD_TIMEOUT_MS env → default REST timeout
+  const timeoutMs = opts.timeoutMs
+    ?? Number(process.env['LMS_LOAD_TIMEOUT_MS'] ?? _restDefaults.timeoutMs);
   const res = await apiFetch(
     '/models/load',
     {

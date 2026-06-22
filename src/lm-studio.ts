@@ -1,10 +1,15 @@
+// src/lm-studio.ts
+import { makeAbortPair, readLMStudioConfig } from './llm-client.js';
+
+// Read env config once at module load. Defaults match original hardcoded values.
+const _envDefaults = readLMStudioConfig();
+
 interface StreamChunk {
   choices: Array<{ delta: { content?: string }; finish_reason: string | null }>;
 }
 
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_NUM_CTX = 32000;
-
+// readStream is unchanged. The try/catch JSON.parse here is a malformed SSE frame
+// guard — not a C4 violation (it is not complex state-based extraction).
 async function readStream(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -38,20 +43,15 @@ async function readStream(body: ReadableStream<Uint8Array>, signal: AbortSignal)
 export async function callLMStudio(
   model: string,
   prompt: string,
-  url: string = 'http://localhost:1234/v1/chat/completions',
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
-  numCtx: number = DEFAULT_NUM_CTX,
+  url: string = _envDefaults.baseUrl,
+  timeoutMs: number = _envDefaults.timeoutMs,
+  numCtx: number = _envDefaults.numCtx,
   signal?: AbortSignal,
   maxTokens?: number,
 ): Promise<string> {
   if (signal?.aborted) throw new Error('LM Studio request cancelled');
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  // Forward external cancellation (SIGINT/SIGTERM) into our controller.
-  const forwardAbort = () => controller.abort();
-  signal?.addEventListener('abort', forwardAbort);
+  const { controller, cleanup } = makeAbortPair(timeoutMs, signal);
 
   let res: Response;
   try {
@@ -71,6 +71,7 @@ export async function callLMStudio(
       signal: controller.signal,
     });
   } catch (err) {
+    cleanup();
     if (err instanceof Error && err.name === 'AbortError') {
       if (signal?.aborted) throw new Error('LM Studio request cancelled');
       throw new Error(`LM Studio request timed out after ${timeoutMs / 1000}s`);
@@ -84,19 +85,15 @@ export async function callLMStudio(
   }
 
   if (!res.ok) {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', forwardAbort);
+    cleanup();
     throw new Error(`LM Studio returned ${res.status}: ${await res.text()}`);
   }
 
   try {
     const raw = await readStream(res.body!, controller.signal);
-    // Strip markdown code fences and any trailing content after closing fence
     let cleaned = raw.trim();
     const fenceMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```/i);
-    if (fenceMatch) {
-      cleaned = fenceMatch[1].trim();
-    }
+    if (fenceMatch) cleaned = fenceMatch[1].trim();
     return cleaned;
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
@@ -105,7 +102,6 @@ export async function callLMStudio(
     }
     throw err;
   } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', forwardAbort);
+    cleanup();
   }
 }
