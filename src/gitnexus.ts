@@ -128,3 +128,24 @@ export async function getCommunities(
     return null;
   }
 }
+
+export async function getImpact(
+  ctx: GitNexusContext,
+  filePath: string,
+): Promise<ImpactResult | null> {
+  try {
+    const normalized = toPosixRelative(ctx.projectRoot, filePath);
+    // Parameterized query — no string interpolation of file paths
+    const result = await ctx.conn.query(
+      `MATCH (dep:File)-[:CodeRelation {type: 'IMPORTS'}]->(f:File)
+       WHERE f.path = $path
+       RETURN DISTINCT dep.path AS depPath`,
+      { path: normalized },
+    );
+    const rows = result.getAll() as Array<{ depPath: string }>;
+    const impactedPaths = rows.map(r => r.depPath).filter(Boolean);
+    return { impactedPaths };
+  } catch {
+    return null;
+  }
+}

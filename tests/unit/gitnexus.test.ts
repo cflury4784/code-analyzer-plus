@@ -13,7 +13,7 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 import { existsSync } from 'fs';
-import { openGitNexus, getFileStructure, getCommunities } from '../../src/gitnexus.js';
+import { openGitNexus, getFileStructure, getCommunities, getImpact } from '../../src/gitnexus.js';
 import type { GitNexusContext } from '../../src/gitnexus.js';
 import kuzu from 'kuzu';
 
@@ -155,5 +155,57 @@ describe('getCommunities', () => {
       projectRoot: '/project',
     };
     expect((await getCommunities(ctx))!.size).toBe(0);
+  });
+});
+
+describe('getImpact', () => {
+  it('returns null when query throws', async () => {
+    const ctx: GitNexusContext = {
+      db: {} as never,
+      conn: { query: vi.fn().mockRejectedValue(new Error('fail')) } as never,
+      projectRoot: '/project',
+    };
+    expect(await getImpact(ctx, 'src/utils.ts')).toBeNull();
+  });
+
+  it('returns list of files that import this file', async () => {
+    const rows = [
+      { depPath: 'src/components/Header.tsx' },
+      { depPath: 'src/pages/Home.tsx' },
+    ];
+    const ctx: GitNexusContext = {
+      db: {} as never,
+      conn: {
+        query: vi.fn().mockResolvedValue({ getAll: vi.fn().mockReturnValue(rows) }),
+      } as never,
+      projectRoot: '/project',
+    };
+    const result = await getImpact(ctx, 'src/utils.ts');
+    expect(result!.impactedPaths).toEqual(['src/components/Header.tsx', 'src/pages/Home.tsx']);
+  });
+
+  it('normalizes filePath before querying', async () => {
+    const ctx: GitNexusContext = {
+      db: {} as never,
+      conn: {
+        query: vi.fn().mockResolvedValue({ getAll: vi.fn().mockReturnValue([]) }),
+      } as never,
+      projectRoot: 'C:/project',
+    };
+    await getImpact(ctx, 'C:\\project\\src\\utils.ts');
+    const params = (ctx.conn.query as ReturnType<typeof vi.fn>).mock.calls[0][1] as Record<string, unknown>;
+    expect(params.path).toBe('src/utils.ts');
+  });
+
+  it('returns empty impactedPaths when no dependents', async () => {
+    const ctx: GitNexusContext = {
+      db: {} as never,
+      conn: {
+        query: vi.fn().mockResolvedValue({ getAll: vi.fn().mockReturnValue([]) }),
+      } as never,
+      projectRoot: '/project',
+    };
+    const result = await getImpact(ctx, 'src/leaf.ts');
+    expect(result!.impactedPaths).toEqual([]);
   });
 });
