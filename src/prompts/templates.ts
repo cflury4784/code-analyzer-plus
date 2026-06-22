@@ -1,4 +1,5 @@
 import type { AnalysisOutput, DedupOutput, IndexOutput } from '../types.js';
+import type { FileStructure } from '../gitnexus.js';
 
 /**
  * Schema version for all prompt templates in this module.
@@ -7,10 +8,21 @@ import type { AnalysisOutput, DedupOutput, IndexOutput } from '../types.js';
 export const SCHEMA_VERSION = 'v1';
 
 /** @schemaVersion v1 — Output contract: IndexOutput[] */
-export function indexPrompt(fileContents: Array<{ path: string; content: string }>): string {
+export function indexPrompt(
+  fileContents: Array<{ path: string; content: string }>,
+  graphData?: Map<string, FileStructure> | null,
+): string {
   const block = fileContents.map(f => `=== ${f.path} ===\n${f.content}`).join('\n\n');
-  return `Analyze each source file below. Return a JSON array where each element has this exact schema:
-{
+
+  const schema = graphData != null
+    ? `{
+  "module": "relative/path",
+  "responsibilities": ["string"],
+  "ui_patterns": ["string"],
+  "duplicated_logic_candidates": [{"description": "string", "similar_to": ["path"]}],
+  "inconsistencies": [{"type": "UI|architecture|naming", "issue": "string"}]
+}`
+    : `{
   "module": "relative/path",
   "responsibilities": ["string"],
   "ui_patterns": ["string"],
@@ -18,8 +30,15 @@ export function indexPrompt(fileContents: Array<{ path: string; content: string 
   "dependencies": ["relative/path"],
   "duplicated_logic_candidates": [{"description": "string", "similar_to": ["path"]}],
   "inconsistencies": [{"type": "UI|architecture|naming", "issue": "string"}]
-}
-Rules: Be concise. Each array: maximum 5 items, one short phrase each. Return ONLY a JSON array. No explanation.
+}`;
+
+  const graphNote = graphData != null
+    ? '\nNote: dependencies and data_flow will be injected from the code graph — omit them from your response.\n'
+    : '';
+
+  return `Analyze each source file below. Return a JSON array where each element has this exact schema:
+${schema}
+Rules: Be concise. Each array: maximum 5 items, one short phrase each. Return ONLY a JSON array. No explanation.${graphNote}
 
 ${block}`;
 }
