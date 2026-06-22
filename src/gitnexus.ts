@@ -1,25 +1,31 @@
-import kuzu from 'kuzu';
-import type { QueryResult, KuzuValue } from 'kuzu';
-import { existsSync } from 'fs';
-import { join, relative } from 'path';
+/**
+ * GitNexus adapter — queries the local .gitnexus/ knowledge graph via the
+ * `gitnexus cypher` CLI subprocess. All public functions return T | null and
+ * never throw; callers use null as a signal to fall back to existing behaviour.
+ *
+ * GitNexus uses LadybugDB (not KuzuDB). The CLI is the supported interface
+ * for external processes; there is no public Node.js SDK to import directly.
+ */
+import { execFileSync } from 'child_process';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 
 export interface GitNexusContext {
-  db: InstanceType<typeof kuzu.Database>;
-  conn: InstanceType<typeof kuzu.Connection>;
   projectRoot: string;
+  repoName: string;  // basename used as the --repo flag value
 }
 
 export interface FileStructure {
-  imports: string[];  // POSIX-relative paths this file imports
-  calls: string[];    // POSIX-relative paths of files containing called symbols
+  imports: string[];  // cross-file call targets (CALLS edges, proxy for dependencies)
+  calls: string[];    // alias — same data, kept for API compatibility
 }
 
 export interface ImpactResult {
-  impactedPaths: string[];  // files that directly import this file (depth 1)
+  impactedPaths: string[];  // files whose symbols call into this file (depth 1)
 }
 
+/** Normalise an absolute or mixed-separator path to a POSIX-relative path. */
 export function toPosixRelative(projectRoot: string, filePath: string): string {
-  // Case-insensitive startsWith for Windows (paths are case-insensitive on NTFS)
   const rootNorm = projectRoot.replace(/\\/g, '/').replace(/\/$/, '');
   const pathNorm = filePath.replace(/\\/g, '/');
   const rel = pathNorm.toLowerCase().startsWith(rootNorm.toLowerCase())
@@ -28,112 +34,167 @@ export function toPosixRelative(projectRoot: string, filePath: string): string {
   return rel.replace(/^\.\//, '');
 }
 
-function unwrap(r: QueryResult | QueryResult[]): QueryResult {
-  return Array.isArray(r) ? r[0] : r;
+function escapeCypherString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-async function execParams(
-  conn: InstanceType<typeof kuzu.Connection>,
-  statement: string,
-  params: Record<string, KuzuValue>,
-): Promise<QueryResult> {
-  const ps = await conn.prepare(statement);
-  const r = await conn.execute(ps, params);
-  return unwrap(r);
+interface CypherOutput {
+  markdown?: string;
+  row_count?: number;
+  error?: string;
 }
 
-async function validateSchema(ctx: GitNexusContext): Promise<boolean> {
+/**
+ * Run a Cypher query via `gitnexus cypher` and return parsed row objects.
+ * Returns null on process error or schema error; returns [] for empty results.
+ */
+function runCypher(ctx: GitNexusContext, query: string): Record<string, string>[] | null {
   try {
-    const r = await ctx.conn.query('MATCH (f:File) RETURN f.path LIMIT 1');
-    unwrap(r).getAllSync();
-    return true;
+    const raw = execFileSync(
+      'gitnexus',
+      ['cypher', '--repo', ctx.repoName, query],
+      {
+        cwd: ctx.projectRoot,
+        encoding: 'utf8',
+        timeout: 30_000,
+        // stdout is captured; stderr is ignored (gitnexus writes progress to stderr)
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
+
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+
+    const parsed = JSON.parse(trimmed) as CypherOutput | unknown[];
+
+    // Empty result set
+    if (Array.isArray(parsed)) return [];
+
+    // Cypher error
+    if ('error' in parsed && parsed.error) return null;
+
+    // Parse markdown table: "| col | col |\n| --- | --- |\n| val | val |"
+    const md = parsed.markdown;
+    if (!md) return [];
+
+    const lines = md.split('\n').filter(l => l.trim());
+    if (lines.length < 2) return [];
+
+    const headers = lines[0]
+      .split('|')
+      .slice(1, -1)
+      .map(h => h.trim());
+
+    // lines[1] is the separator row — skip it
+    return lines.slice(2).map(line => {
+      const values = line.split('|').slice(1, -1).map(v => v.trim());
+      const row: Record<string, string> = {};
+      headers.forEach((h, i) => { row[h] = values[i] ?? ''; });
+      return row;
+    });
   } catch {
-    return false;
+    return null;
   }
 }
 
-export function closeGitNexus(ctx: GitNexusContext): void {
-  try { ctx.conn.closeSync(); } catch {}
-  try { ctx.db.closeSync(); } catch {}
-}
+/** Close any resources. No-op for the CLI adapter (no persistent connection). */
+export function closeGitNexus(_ctx: GitNexusContext): void {}
 
+/**
+ * Open a GitNexus context for the given project root.
+ * Returns null if no .gitnexus index exists or the cypher probe fails.
+ */
 export async function openGitNexus(projectRoot: string): Promise<GitNexusContext | null> {
   try {
-    const dbPath = join(projectRoot, '.gitnexus');
-    if (!existsSync(dbPath)) return null;
-    // readOnly=true — prevents write-lock conflicts with the MCP server
-    // constructor: (path, bufferManagerSize?, enableCompression?, readOnly?, maxDBSize?, ...)
-    const db = new kuzu.Database(dbPath, undefined, undefined, true);
-    const conn = new kuzu.Connection(db);
-    const ctx = { db, conn, projectRoot };
-    const valid = await validateSchema(ctx);
-    if (!valid) { closeGitNexus(ctx); return null; }
+    const metaPath = join(projectRoot, '.gitnexus', 'meta.json');
+    if (!existsSync(metaPath)) return null;
+
+    // Derive the repo name (used as the --repo flag) from the directory basename
+    const repoName = projectRoot.replace(/\\/g, '/').replace(/\/$/, '').split('/').pop();
+    if (!repoName) return null;
+
+    const ctx: GitNexusContext = { projectRoot, repoName };
+
+    // Validate: run a trivial query to confirm the index is readable
+    const probe = runCypher(ctx, 'MATCH (f:File) RETURN f.filePath LIMIT 1');
+    if (probe === null) return null;
+
     return ctx;
   } catch {
     return null;
   }
 }
 
+/**
+ * Return cross-file call dependencies for a set of files.
+ * Uses CALLS edges (symbol → symbol across files) as a proxy for imports.
+ * Returns null on error; returns a map with empty structures when there are no edges.
+ */
 export async function getFileStructure(
   ctx: GitNexusContext,
   paths: string[],
 ): Promise<Map<string, FileStructure> | null> {
   try {
     const normalized = paths.map(p => toPosixRelative(ctx.projectRoot, p));
+    const pathList = normalized.map(p => `'${escapeCypherString(p)}'`).join(', ');
 
-    // Run both queries in parallel; prepare+execute for parameterized form (no injection)
-    const [importResult, callResult] = await Promise.all([
-      execParams(ctx.conn,
-        `MATCH (f:File)-[:CodeRelation {type: 'IMPORTS'}]->(dep:File)
-         WHERE f.path IN $paths
-         RETURN f.path AS src, dep.path AS dep`,
-        { paths: normalized },
-      ),
-      execParams(ctx.conn,
-        `MATCH (f:File)-[:CodeRelation {type: 'CALLS'}]->(sym)
-         WHERE f.path IN $paths
-         RETURN f.path AS src, sym.filePath AS dep`,
-        { paths: normalized },
-      ),
-    ]);
+    const rows = runCypher(
+      ctx,
+      `MATCH (a)-[r:CodeRelation {type:'CALLS'}]->(b)
+       WHERE a.filePath IN [${pathList}]
+       AND b.filePath IS NOT NULL
+       AND a.filePath <> b.filePath
+       RETURN DISTINCT a.filePath AS src, b.filePath AS dep`,
+    );
 
-    const importRows = importResult.getAllSync() as Array<{ src: string; dep: string }>;
-    const callRows = callResult.getAllSync() as Array<{ src: string; dep: string }>;
+    if (rows === null) return null;
 
     const result = new Map<string, FileStructure>();
     for (const p of normalized) result.set(p, { imports: [], calls: [] });
 
-    for (const row of importRows) {
-      if (!row.src || !row.dep) continue;
-      const s = result.get(row.src);
-      if (s && !s.imports.includes(row.dep)) s.imports.push(row.dep);
+    if (rows.length > 0) {
+      for (const row of rows) {
+        const src = row['src'];
+        const dep = row['dep'];
+        if (!src || !dep) continue;
+        const s = result.get(src);
+        if (s && !s.imports.includes(dep)) {
+          s.imports.push(dep);
+          s.calls.push(dep);
+        }
+      }
     }
-    for (const row of callRows) {
-      if (!row.src || !row.dep) continue;
-      const s = result.get(row.src);
-      if (s && !s.calls.includes(row.dep)) s.calls.push(row.dep);
-    }
+
     return result;
   } catch {
     return null;
   }
 }
 
+/**
+ * Return a map of community label → file paths belonging to that community.
+ * Community membership is derived via symbol MEMBER_OF edges (symbols carry filePath).
+ */
 export async function getCommunities(
   ctx: GitNexusContext,
 ): Promise<Map<string, string[]> | null> {
   try {
-    const raw = await ctx.conn.query(
-      `MATCH (f:File)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
-       RETURN f.path AS filePath, c.name AS community`,
+    const rows = runCypher(
+      ctx,
+      `MATCH (sym)-[r:CodeRelation {type:'MEMBER_OF'}]->(c:Community)
+       WHERE sym.filePath IS NOT NULL
+       RETURN DISTINCT sym.filePath AS filePath, c.label AS community`,
     );
-    const rows = unwrap(raw).getAllSync() as Array<{ filePath: string; community: string }>;
+    if (rows === null) return null;
 
     const communities = new Map<string, string[]>();
     for (const row of rows) {
-      if (!row.filePath || !row.community) continue;
-      if (!communities.has(row.community)) communities.set(row.community, []);
-      communities.get(row.community)!.push(row.filePath);
+      const fp = row['filePath'];
+      const comm = row['community'];
+      if (!fp || !comm) continue;
+      if (!communities.has(comm)) communities.set(comm, []);
+      const files = communities.get(comm)!;
+      if (!files.includes(fp)) files.push(fp);
     }
     return communities;
   } catch {
@@ -141,21 +202,25 @@ export async function getCommunities(
   }
 }
 
+/**
+ * Return the set of files that call into symbols defined in filePath (depth 1).
+ */
 export async function getImpact(
   ctx: GitNexusContext,
   filePath: string,
 ): Promise<ImpactResult | null> {
   try {
     const normalized = toPosixRelative(ctx.projectRoot, filePath);
-    // prepare+execute for parameterized form — no string interpolation of file paths
-    const result = await execParams(ctx.conn,
-      `MATCH (dep:File)-[:CodeRelation {type: 'IMPORTS'}]->(f:File)
-       WHERE f.path = $path
-       RETURN DISTINCT dep.path AS depPath`,
-      { path: normalized },
+    const rows = runCypher(
+      ctx,
+      `MATCH (a)-[r:CodeRelation {type:'CALLS'}]->(b)
+       WHERE b.filePath = '${escapeCypherString(normalized)}'
+       AND a.filePath IS NOT NULL
+       AND a.filePath <> b.filePath
+       RETURN DISTINCT a.filePath AS depPath`,
     );
-    const rows = result.getAllSync() as Array<{ depPath: string }>;
-    const impactedPaths = rows.map(r => r.depPath).filter(Boolean);
+    if (rows === null) return null;
+    const impactedPaths = rows.map(r => r['depPath']).filter(Boolean);
     return { impactedPaths };
   } catch {
     return null;
