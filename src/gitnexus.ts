@@ -106,3 +106,25 @@ export async function getFileStructure(
     return null;
   }
 }
+
+export async function getCommunities(
+  ctx: GitNexusContext,
+): Promise<Map<string, string[]> | null> {
+  try {
+    const result = await ctx.conn.query(
+      `MATCH (f:File)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
+       RETURN f.path AS filePath, c.name AS community`,
+    );
+    const rows = result.getAll() as Array<{ filePath: string; community: string }>;
+
+    const communities = new Map<string, string[]>();
+    for (const row of rows) {
+      if (!row.filePath || !row.community) continue;
+      if (!communities.has(row.community)) communities.set(row.community, []);
+      communities.get(row.community)!.push(row.filePath);
+    }
+    return communities;
+  } catch {
+    return null;
+  }
+}

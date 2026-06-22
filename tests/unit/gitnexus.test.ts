@@ -13,7 +13,7 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 import { existsSync } from 'fs';
-import { openGitNexus, getFileStructure } from '../../src/gitnexus.js';
+import { openGitNexus, getFileStructure, getCommunities } from '../../src/gitnexus.js';
 import type { GitNexusContext } from '../../src/gitnexus.js';
 import kuzu from 'kuzu';
 
@@ -115,5 +115,45 @@ describe('getFileStructure', () => {
     };
     const result = await getFileStructure(ctx, ['C:\\project\\src\\foo.ts']);
     expect(result!.has('src/foo.ts')).toBe(true);
+  });
+});
+
+describe('getCommunities', () => {
+  it('returns null when query throws', async () => {
+    const ctx: GitNexusContext = {
+      db: {} as never,
+      conn: { query: vi.fn().mockRejectedValue(new Error('fail')) } as never,
+      projectRoot: '/project',
+    };
+    expect(await getCommunities(ctx)).toBeNull();
+  });
+
+  it('groups file paths by community name', async () => {
+    const rows = [
+      { filePath: 'src/auth/login.ts', community: 'auth' },
+      { filePath: 'src/auth/logout.ts', community: 'auth' },
+      { filePath: 'src/ui/button.ts', community: 'ui' },
+    ];
+    const ctx: GitNexusContext = {
+      db: {} as never,
+      conn: {
+        query: vi.fn().mockResolvedValue({ getAll: vi.fn().mockReturnValue(rows) }),
+      } as never,
+      projectRoot: '/project',
+    };
+    const result = await getCommunities(ctx);
+    expect(result!.get('auth')).toEqual(['src/auth/login.ts', 'src/auth/logout.ts']);
+    expect(result!.get('ui')).toEqual(['src/ui/button.ts']);
+  });
+
+  it('returns empty map when no community edges', async () => {
+    const ctx: GitNexusContext = {
+      db: {} as never,
+      conn: {
+        query: vi.fn().mockResolvedValue({ getAll: vi.fn().mockReturnValue([]) }),
+      } as never,
+      projectRoot: '/project',
+    };
+    expect((await getCommunities(ctx))!.size).toBe(0);
   });
 });
