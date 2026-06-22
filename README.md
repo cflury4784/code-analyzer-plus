@@ -26,18 +26,18 @@ npm run build
 To install globally (makes the `code-analyzer` command available system-wide):
 
 ```bash
-# Development — symlinks the local build (changes rebuild immediately after npm run build)
+# Recommended for local development — symlinks the project directory,
+# so changes are live immediately after npm run build
 npm link
 
-# Production — copies the current build into the global npm prefix
-npm install -g .
+# Production install — copies the current build into the global npm prefix
+npm run build && npm install -g .
 ```
 
-If a previous version of code-analyzer is globally installed, unlink it first:
+If a previous version of code-analyzer is globally installed, remove it first:
 
 ```bash
-cd /path/to/old/code-analyzer
-npm unlink
+npm uninstall -g code-analyzer
 ```
 
 ---
