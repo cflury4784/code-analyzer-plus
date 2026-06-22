@@ -4,8 +4,10 @@ import { readManifest, writeManifest, updateBatchStatus, updatePhaseStatus } fro
 import { callLMStudio } from '../lm-studio.js';
 import { withRetry } from '../retry.js';
 import { refactorPrompt } from '../prompts/templates.js';
+import { getImpact } from '../gitnexus.js';
 import type { Logger } from '../logger.js';
 import type { BatchEntry, IndexOutput, RefactorPlanEntry } from '../types.js';
+import type { GitNexusContext } from '../gitnexus.js';
 
 const MAX_ATTEMPTS = 3;
 const MAX_FILE_BYTES = 100 * 1024;
@@ -179,6 +181,7 @@ export async function runRefactorPhase(
   timeoutMs?: number,
   numCtx?: number,
   signal?: AbortSignal,
+  gitNexusCtx?: GitNexusContext | null,
 ): Promise<void> {
   let manifest = readManifest(projectRoot);
   const { batches: computedBatches, groups, fileContentMaps } = buildRefactorGroups(projectRoot, logger);
@@ -203,9 +206,24 @@ export async function runRefactorPhase(
     const moduleItems = groups[i] ?? [];
     const contentMap = fileContentMaps[i] ?? new Map<string, string>();
 
+    // Collect combined impact for all files in this batch (parallel -> one query per file)
+    let batchImpactedPaths: string[] | null = null;
+    if (gitNexusCtx) {
+      const batchFiles = moduleItems.map(m => m.module);
+      const impacts = await Promise.all(batchFiles.map(fp => getImpact(gitNexusCtx, fp)));
+      const allImpacted = new Set<string>();
+      for (const impact of impacts) {
+        if (impact) impact.impactedPaths.forEach(p => allImpacted.add(p));
+      }
+      // Remove files that are themselves in this batch
+      const batchNorm = new Set(batchFiles.map(fp => fp.replace(/\\/g, '/')));
+      for (const fp of batchNorm) allImpacted.delete(fp);
+      batchImpactedPaths = allImpacted.size > 0 ? [...allImpacted].sort() : null;
+    }
+
     const result = await withRetry(
       async () => {
-        const prompt = refactorPrompt(standardsMd, moduleItems, contentMap);
+        const prompt = refactorPrompt(standardsMd, moduleItems, contentMap, batchImpactedPaths);
         const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 4000);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
         logger.debug(`${batch.id} raw`, { preview: raw.slice(0, 300) });
