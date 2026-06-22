@@ -133,13 +133,18 @@ ${JSON.stringify(deduped, null, 2)}`;
 export function refactorPrompt(
   standardsMd: string,
   modules: IndexOutput[],
-  fileContents: Map<string, string>
+  fileContents: Map<string, string>,
+  impactedPaths?: string[] | null,
 ): string {
   const fileBlock = [...fileContents.entries()]
     .map(([path, content]) => `=== ${path} ===\n${content}`)
     .join('\n\n');
 
-  return `You are a senior engineer. Using the standards, module summaries, and file contents below, create a refactor plan.
+  const impactSection = impactedPaths && impactedPaths.length > 0
+    ? `\nKnown dependents (files that import or call into these modules -> ensure your plan accounts for them in dependencies_impacted and tests_to_validate):\n${impactedPaths.map(p => `  - ${p}`).join('\n')}\n`
+    : '';
+
+  return `You are a senior engineer. Using the standards, module summaries, and file contents below, create a refactor plan.${impactSection}
 Return a JSON array where each element is one of:
 
 Full plan entry:
