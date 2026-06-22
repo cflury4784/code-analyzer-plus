@@ -61,3 +61,48 @@ export async function openGitNexus(projectRoot: string): Promise<GitNexusContext
     return null;
   }
 }
+
+export async function getFileStructure(
+  ctx: GitNexusContext,
+  paths: string[],
+): Promise<Map<string, FileStructure> | null> {
+  try {
+    const normalized = paths.map(p => toPosixRelative(ctx.projectRoot, p));
+
+    // Run both queries in parallel; use parameterized form to avoid Cypher injection
+    const [importResult, callResult] = await Promise.all([
+      ctx.conn.query(
+        `MATCH (f:File)-[:CodeRelation {type: 'IMPORTS'}]->(dep:File)
+         WHERE f.path IN $paths
+         RETURN f.path AS src, dep.path AS dep`,
+        { paths: normalized },
+      ),
+      ctx.conn.query(
+        `MATCH (f:File)-[:CodeRelation {type: 'CALLS'}]->(sym)
+         WHERE f.path IN $paths
+         RETURN f.path AS src, sym.filePath AS dep`,
+        { paths: normalized },
+      ),
+    ]);
+
+    const importRows = importResult.getAll() as Array<{ src: string; dep: string }>;
+    const callRows = callResult.getAll() as Array<{ src: string; dep: string }>;
+
+    const result = new Map<string, FileStructure>();
+    for (const p of normalized) result.set(p, { imports: [], calls: [] });
+
+    for (const row of importRows) {
+      if (!row.src || !row.dep) continue;
+      const s = result.get(row.src);
+      if (s && !s.imports.includes(row.dep)) s.imports.push(row.dep);
+    }
+    for (const row of callRows) {
+      if (!row.src || !row.dep) continue;
+      const s = result.get(row.src);
+      if (s && !s.calls.includes(row.dep)) s.calls.push(row.dep);
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
