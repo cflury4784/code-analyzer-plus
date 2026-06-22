@@ -1,189 +1,217 @@
-# code-analyzer
+# code-analyzer+
 
-A globally-installed CLI that runs a five-phase AI-assisted analysis pipeline on any codebase: indexing, consistency analysis, deduplication, standards aggregation, and refactor planning.
+A local, LLM-powered codebase analysis and refactor-planning tool. Runs a five-phase pipeline against any TypeScript/JavaScript project and produces a structured refactor plan grounded in your own coding standards.
 
-All phases use LM Studio's local REST API — no cloud APIs required. State is persisted in `code-analysis/manifest.json`. Every phase skips already-completed work, so the tool is safe to re-run or resume after any interruption.
+Extends [code-analyzer](https://github.com/cflury4784/code-analyzer) with optional **GitNexus** integration — when a `.gitnexus/` knowledge graph is present, the pipeline uses structural graph data to group related files together, inject accurate dependency lists, and surface blast-radius context in every refactor prompt.
 
 ---
 
-## Requirements
+## Prerequisites
 
-- Node.js 20+
-- [LM Studio](https://lmstudio.ai) 0.3.x+ with the REST API enabled (`localhost:1234`)
-- A loaded model — default: `qwen3.6-35b-a3b@q3_k_s`
-
-The preflight step handles loading the model automatically if it is not already running.
+- **Node.js 20+**
+- **[LM Studio](https://lmstudio.ai)** running locally with a supported model loaded (see [Models](#models))
+- **GitNexus** *(optional, but recommended)* — `npm install -g gitnexus` — enables graph-enriched analysis
 
 ---
 
 ## Installation
 
 ```bash
-git clone <repo>
-cd code-analyzer
+git clone https://github.com/cflury4784/code-analyzer-plus
+cd code-analyzer+
 npm install
 npm run build
-npm install -g .
+```
+
+To use as a global CLI:
+
+```bash
+npm link
 ```
 
 ---
 
-## Usage
+## Quick Start
 
-Run from the root of any project:
+Navigate to the project you want to analyze, then run:
 
 ```bash
+cd /path/to/your/project
+node /path/to/code-analyzer+/dist/index.js
+```
+
+Or if installed globally:
+
+```bash
+cd /path/to/your/project
 code-analyzer
 ```
 
-Runs all five phases sequentially. If `code-analysis/manifest.json` exists, completed batches are skipped automatically.
+On first run, the tool:
+1. Checks for a `.gitnexus/` index in the target project — prompts to continue without it if absent
+2. Verifies LM Studio is running and the model is loaded (auto-loads if needed)
+3. Discovers source files and creates `code-analysis/manifest.json`
+4. Runs all five phases sequentially, writing results to `code-analysis/`
+
+---
+
+## GitNexus Enrichment
+
+If the target project has been indexed by GitNexus (`npx gitnexus analyze`), code-analyzer+ automatically:
+
+- **Refreshes the index** before the pipeline starts (`npx gitnexus analyze`)
+- **Index phase** — injects graph-derived `dependencies` (actual import paths from the AST) into each file's index entry instead of asking the LLM to infer them
+- **Analyze phase** — groups files by their community cluster (modules that import each other heavily) instead of naive byte-size grouping; related files are analyzed together, improving cross-file pattern detection
+- **Refactor phase** — fetches the reverse-dependency graph for each batch and injects a "Known dependents" section into each prompt so the LLM accounts for downstream impact
+
+Without a `.gitnexus/` index, the tool falls back to the original behavior: byte-based batching, LLM-inferred dependencies, no impact context. The fallback is transparent — no features are removed, only enrichment is skipped.
+
+### First-time GitNexus setup for a target project
 
 ```bash
-code-analyzer --resume
+cd /path/to/your/project
+npm install -g gitnexus   # if not already installed
+npx gitnexus analyze
 ```
 
-Same as above — `--resume` is accepted as an explicit flag but the default behavior is already resumable.
+Then run code-analyzer+ — it picks up the index automatically.
 
 ---
 
-## Phases
+## Pipeline Phases
 
-| Phase | Name | Output |
-|-------|------|--------|
-| 1 | Index | `code-analysis/index/batch-XXX.json` |
-| 2 | Analyze | `code-analysis/analyzer/group-XXX.json` |
-| 2.5 | Dedup | `code-analysis/dedup/partial-XXX.json`, `findings.json` |
-| 3 | Aggregate | `code-analysis/aggregate/standards.md`, `refactor-strategy.md` |
-| 4 | Refactor Plan | `code-analysis/refactor/plan-XXX.md` |
+| Phase | Output | What happens |
+|---|---|---|
+| **1 — Index** | `code-analysis/index/` | Each file is summarized: responsibilities, UI patterns, duplication candidates, inconsistencies. With GitNexus: accurate `dependencies` injected from the import graph. |
+| **2 — Analyze** | `code-analysis/analyzer/` | Index entries are grouped and cross-analyzed for patterns, shared anti-patterns, and architectural inconsistencies. With GitNexus: files grouped by community cluster. |
+| **2.5 — Dedup** | `code-analysis/dedup/` | Duplicate findings across analyze batches are merged and deduplicated. |
+| **3 — Aggregate** | `code-analysis/aggregate/` | All findings consolidated into a single ranked summary. |
+| **4 — Refactor** | `code-analysis/refactor/` | Per-file refactor plans generated against your `standards.md`. With GitNexus: "Known dependents" section added to each prompt so impact is considered. |
 
-All phases call LM Studio. No external CLI dependencies.
-
-**Context budget:** every LM call computes `max_tokens = floor(numCtx × 0.85) − estimated_input_tokens` (via `calculateSafeMaxTokens` in `src/utils.ts`) so the model always finishes within the context window. Truncated or malformed responses are retried up to 3×.
-
-**Phase 2.5 (Dedup):** runs two passes. Pass A deduplicates analysis groups in parallel batches. Pass B merges the partials using a hierarchical pair-merge loop so no single call exceeds the context budget regardless of how many partials were produced.
+Results accumulate in `code-analysis/` inside the target project. Logs are written to `code-analysis/logs/run.log`.
 
 ---
 
-## Output Directory
+## CLI Flags
+
+```
+--model-override <name>   Use a specific model key (default: qwen3.6-35b-a3b)
+--phase <name>            Run only one phase: index | analyze | dedup | aggregate | refactor
+--resume                  Resume an in-progress phase (skip completed batches)
+--max-batch-size <bytes>  Max bytes per index batch (default: 8000)
+--timeout <seconds>       Per-batch LLM timeout (default: 600)
+--num-ctx <tokens>        Context window size (default: 32000)
+--skip-preflight          Skip LM Studio model-ready check
+--version / -v            Print version and exit
+```
+
+### Examples
+
+Run only the refactor phase (assumes index/analyze/dedup/aggregate are done):
+
+```bash
+node dist/index.js --phase refactor
+```
+
+Resume a failed index phase:
+
+```bash
+node dist/index.js --phase index --resume
+```
+
+Use a smaller model with a tighter context window:
+
+```bash
+node dist/index.js --model-override qwen/qwen3.5-9b --num-ctx 16000
+```
+
+---
+
+## Models
+
+The tool uses LM Studio's local inference API. Supported model keys:
+
+| Key | Quant | Min RAM |
+|---|---|---|
+| `qwen3.6-35b-a3b` *(default)* | Q3_K_S | 30 GB |
+| `qwen3.6-27b-mtp` | Q3_K_M | 24 GB |
+| `qwen/qwen3.5-9b` | — | 18 GB |
+
+At startup, the tool checks whether the model is loaded in LM Studio and loads it automatically if not. Ensure LM Studio's local server is running on port 1234 (the default).
+
+---
+
+## Output Structure
 
 ```
 code-analysis/
-  manifest.json
-  index/
-    batch-001.json
-    ...
-  analyzer/
-    group-001.json
-    ...
-  dedup/
-    partial-001.json
-    ...
-    findings.json
-  aggregate/
-    standards.md
-    refactor-strategy.md
-  refactor/
-    plan-001.md
-    ...
-  logs/
-    run.log
+├── manifest.json          # pipeline state — batch tracking and phase status
+├── logs/
+│   └── run.log
+├── index/
+│   └── batch-001.json     # per-file summaries
+├── analyzer/
+│   └── group-001.json     # cross-file analysis
+├── dedup/
+│   └── dedup-001.json
+├── aggregate/
+│   └── summary.json
+└── refactor/
+    └── plan-001.md        # refactor plans (one per analyze group)
+```
+
+Each refactor plan entry includes:
+- `file` — relative path
+- `change` — exact description of what to change
+- `before` / `after` — verbatim lines from the source
+- `before_lines` — 1-indexed line range
+- `dependencies_impacted` — files the change may affect
+- `tests_to_validate` — suggested test cases
+
+Files with no violations produce a `no_violations` entry with a confidence rating.
+
+---
+
+## Standards File
+
+The refactor phase looks for a `standards.md` in the target project root. This file defines your coding standards — naming conventions, architectural rules, patterns to enforce or avoid. If absent, the LLM uses general best practices.
+
+Example `standards.md` excerpt:
+
+```markdown
+# Standards
+
+- No default exports — use named exports only
+- All async functions must have explicit return types
+- React components: props interface declared above the component
+- No inline styles — use CSS modules or Tailwind only
 ```
 
 ---
 
-## CLI Options
+## Resuming a Run
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--phase=<name>` | (all) | Run only `index`, `analyze`, `dedup`, `aggregate`, or `refactor` |
-| `--resume` | false | Explicit resume flag — behavior is identical to a plain re-run |
-| `--max-batch-size=<bytes>` | 8000 | Max bytes per index batch (Phase 1) — default is `BATCH_SIZE_LIMIT_BYTES` in `config/constants.ts` |
-| `--model-override=<id>` | `qwen3.6-35b-a3b` | LM Studio model identifier |
-| `--num-ctx=<tokens>` | 32000 | Context window size passed to the model |
-| `--timeout=<seconds>` | 600 | Per-request timeout |
-| `--skip-preflight` | false | Skip model load check — use if model is already loaded externally |
+The manifest tracks the status of every batch. If a run is interrupted:
 
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `DEBUG=1` | Print debug-level log lines to stdout (response previews, etc.) — always written to `run.log` |
-
----
-
-## Common Workflows
-
-**Full run from scratch:**
 ```bash
-code-analyzer
+node dist/index.js --resume
 ```
 
-**Resume after interruption** (completed batches skipped automatically):
+This skips completed batches and retries failed ones. To reset a specific phase and re-run it from scratch:
+
 ```bash
-code-analyzer --resume
+node dist/index.js --phase analyze
 ```
 
-**Re-run a single phase from scratch:**
-```bash
-code-analyzer --phase=analyze
-```
-
-**Resume a specific phase:**
-```bash
-code-analyzer --phase=analyze --resume
-```
-
-**Use a different model:**
-```bash
-code-analyzer --model-override=qwen2.5-coder-14b
-```
-
-**Larger context window:**
-```bash
-code-analyzer --num-ctx=64000
-```
-
-**Debug LM responses:**
-```bash
-DEBUG=1 code-analyzer --phase=refactor
-```
-
----
-
-## What Gets Scanned
-
-All files under the project root, recursively.
-
-**Excluded directories:** `node_modules`, `.git`, `dist`, `build`, `out`, `coverage`, `code-analysis`, `.next`, `.nuxt`, `.turbo`, `.cache`, `__pycache__`, `.venv`, `venv`, `.svelte-kit`, `tmp`, `temp`
-
-**Excluded files:** lock files (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, etc.), source maps (`.map`), minified files (`.min.js`, `.min.css`), snapshots (`.snap`)
-
-**Size limit:** files over `FILE_SIZE_LIMIT_BYTES` (100 KB, defined in `config/constants.ts`) are skipped during discovery — they tend to be generated or too token-dense for a local model context window.
+(Omitting `--resume` resets the phase before running it.)
 
 ---
 
 ## Development
 
 ```bash
-npm install
-npm run dev      # run via tsx (no build needed)
-npm test         # run test suite (95 tests across 12 files)
-npm run build    # compile to dist/
-```
-
-**Tuning constants:** `config/constants.ts` is the single source of truth for size limits. Edit `FILE_SIZE_LIMIT_BYTES` to change the file-read gate, or `BATCH_SIZE_LIMIT_BYTES` to change the prompt-batching budget; both are imported by their respective modules automatically.
-
-**Prompt schema version:** `src/prompts/templates.ts` exports `SCHEMA_VERSION = 'v1'`. Increment this when any prompt's output contract (field names or types) changes, so callers can detect incompatible outputs.
-
----
-
-## Utility Scripts
-
-One-off Python scripts for modifying an existing `manifest.json` (e.g., to retroactively skip directories after a run has started). All accept the manifest path as their first argument and share a common filter factory from `batch_filter.py`.
-
-```bash
-python patch_manifest2.py path/to/manifest.json   # exclude docs/, scripts/mobile-validation/
-python patch_manifest3.py path/to/manifest.json   # exclude .superpowers/, .claude/, .vercel/, etc.
-python patch_manifest4.py path/to/manifest.json   # exclude lib/db/migrations/meta/, .DS_Store
-python list_dirs.py path/to/manifest.json         # print top-level directory counts
+npm run dev        # run via tsx (no build step)
+npm test           # vitest in watch mode
+npm run test:run   # single test run
+npm run build      # tsc compile to dist/
 ```
