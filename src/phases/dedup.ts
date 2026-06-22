@@ -8,8 +8,9 @@ import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, DedupOutput } from '../types.js';
 
 const MAX_ATTEMPTS = 3;
-const MAX_GROUP_BYTES = 20000;
+const MAX_GROUP_BYTES = 12000;  // smaller batches → smaller output → less truncation risk
 const DEFAULT_NUM_CTX = 32000;
+const MAX_OUTPUT_TOKENS = 6000;  // dedup responses are large JSON objects
 
 function safeMaxTokens(promptLen: number, numCtx: number, cap: number): number {
   const inputTokens = Math.ceil(promptLen / 3.5);
@@ -99,7 +100,7 @@ export async function runDedupPhase(
     const result = await withRetry(
       async () => {
         const prompt = deduplicatePromptPassA(groupItems);
-        const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 2500);
+        const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
         const parsed = JSON.parse(raw) as DedupOutput;
         mkdirSync(join(projectRoot, 'code-analysis', 'dedup'), { recursive: true });
@@ -154,7 +155,7 @@ export async function runDedupPhase(
       const merged = await withRetry(
         async () => {
           const prompt = deduplicatePromptPassB(chunk);
-          const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 2500);
+          const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
           const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
           return JSON.parse(raw) as DedupOutput;
         },

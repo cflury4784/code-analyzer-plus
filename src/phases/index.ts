@@ -164,6 +164,12 @@ export async function runIndexPhase(
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, 1500);
         const parsed = JSON.parse(extractJsonArray(raw)) as Partial<IndexOutput>[];
 
+        // Guard: model sometimes returns a flat string[] (e.g. just the responsibilities
+        // array) instead of an IndexOutput[]. Throwing here lets withRetry retry the batch.
+        if (!Array.isArray(parsed) || parsed.some(item => typeof item !== 'object' || item === null || !('module' in item))) {
+          throw new Error(`model returned invalid schema: expected IndexOutput[], got ${JSON.stringify(parsed).slice(0, 120)}`);
+        }
+
         // Merge graph-sourced structural fields back into each item
         // data_flow is intentionally omitted — import paths are not data flow descriptions;
         // leave it for the LLM to infer from file contents

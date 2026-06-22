@@ -13,6 +13,7 @@ const MAX_ATTEMPTS = 3;
 const MAX_FILE_BYTES = 100 * 1024;
 const MAX_CONTENT_BUDGET = 28 * 1024;
 const DEFAULT_NUM_CTX = 32000;
+const MAX_OUTPUT_TOKENS = 8000;  // refactor plans can be large; 4000 clips multi-file batches
 
 function safeMaxTokens(promptLen: number, numCtx: number, cap: number): number {
   const inputTokens = Math.ceil(promptLen / 3.5);
@@ -21,6 +22,13 @@ function safeMaxTokens(promptLen: number, numCtx: number, cap: number): number {
 }
 
 const VALID_ESCAPES = new Set(['"', "'", '\\', '/', 'b', 'f', 'n', 'r', 't', 'u']);
+const JSON_STRUCTURAL = new Set([',', '}', ']', ':', '"', "'", '\n', '\r']);
+
+// Return the first non-whitespace char at or after position j in s, or '' if none.
+function peekNonWs(s: string, j: number): string {
+  while (j < s.length && (s[j] === ' ' || s[j] === '\t')) j++;
+  return j < s.length ? s[j] : '';
+}
 
 function sanitizeRaw(raw: string): string {
   let s = raw.trim().replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
@@ -48,8 +56,15 @@ function sanitizeRaw(raw: string): string {
           i += 2;
         }
       } else if (ch === delim) {
-        inString = false;
-        result += '"';
+        // Lookahead: if followed by a JSON structural character it's a real closing quote.
+        // Otherwise it's an unescaped embedded quote (e.g. code snippet) — escape it.
+        const after = peekNonWs(s, i + 1);
+        if (JSON_STRUCTURAL.has(after) || after === '') {
+          inString = false;
+          result += '"';
+        } else {
+          result += '\\"';
+        }
         i++;
       } else if (ch === '"' && delim === "'") {
         result += '\\"';
@@ -224,7 +239,7 @@ export async function runRefactorPhase(
     const result = await withRetry(
       async () => {
         const prompt = refactorPrompt(standardsMd, moduleItems, contentMap, batchImpactedPaths);
-        const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 4000);
+        const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
         logger.debug(`${batch.id} raw`, { preview: raw.slice(0, 300) });
         const parsed = JSON.parse(sanitizeRaw(raw)) as RefactorPlanEntry[];

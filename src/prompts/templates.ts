@@ -13,33 +13,46 @@ export function indexPrompt(
   graphData?: Map<string, FileStructure> | null,
 ): string {
   const block = fileContents.map(f => `=== ${f.path} ===\n${f.content}`).join('\n\n');
+  const fileCount = fileContents.length;
 
-  const schema = graphData != null
-    ? `{
-  "module": "relative/path",
-  "responsibilities": ["string"],
-  "ui_patterns": ["string"],
-  "duplicated_logic_candidates": [{"description": "string", "similar_to": ["path"]}],
-  "inconsistencies": [{"type": "UI|architecture|naming", "issue": "string"}]
-}`
-    : `{
-  "module": "relative/path",
-  "responsibilities": ["string"],
-  "ui_patterns": ["string"],
-  "data_flow": ["string"],
-  "dependencies": ["relative/path"],
-  "duplicated_logic_candidates": [{"description": "string", "similar_to": ["path"]}],
-  "inconsistencies": [{"type": "UI|architecture|naming", "issue": "string"}]
-}`;
+  const schemaFields = graphData != null
+    ? `    "module": "relative/path/to/file.ts",
+    "responsibilities": ["short phrase"],
+    "ui_patterns": ["short phrase"],
+    "duplicated_logic_candidates": [{"description": "short phrase", "similar_to": ["path"]}],
+    "inconsistencies": [{"type": "UI|architecture|naming", "issue": "short phrase"}]`
+    : `    "module": "relative/path/to/file.ts",
+    "responsibilities": ["short phrase"],
+    "ui_patterns": ["short phrase"],
+    "data_flow": ["short phrase"],
+    "dependencies": ["relative/path"],
+    "duplicated_logic_candidates": [{"description": "short phrase", "similar_to": ["path"]}],
+    "inconsistencies": [{"type": "UI|architecture|naming", "issue": "short phrase"}]`;
 
   const graphNote = graphData != null
-    ? '\nNote: dependencies and data_flow will be injected from the code graph — omit them from your response.\n'
+    ? '\nIMPORTANT: omit the dependencies and data_flow fields — they are injected separately.\n'
     : '';
 
-  return `Analyze each source file below. Return a JSON array where each element has this exact schema:
-${schema}
-Rules: Be concise. Each array: maximum 5 items, one short phrase each. Return ONLY a JSON array. No explanation.${graphNote}
+  const example = `[
+  {
+${schemaFields}
+  }
+]`;
 
+  return `You are a code indexer. Analyze the ${fileCount} source file(s) below.
+
+OUTPUT FORMAT — you must return a JSON array with exactly ${fileCount} element(s), one object per file:
+${example}
+
+RULES:
+- The outer structure is ALWAYS a JSON array [ ... ] containing objects.
+- Each object MUST have a "module" field with the file's relative path.
+- NEVER return a flat array of strings. NEVER return a single object without wrapping it in [ ].
+- Each sub-array (responsibilities, ui_patterns, etc.): maximum 5 items, one short phrase each.
+- Empty arrays [] are fine when nothing applies.
+- Return ONLY the JSON array. No explanation, no markdown fences.${graphNote}
+
+SOURCE FILES:
 ${block}`;
 }
 
