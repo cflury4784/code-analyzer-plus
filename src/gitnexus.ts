@@ -7,8 +7,8 @@
  * for external processes; there is no public Node.js SDK to import directly.
  */
 import { execFileSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync } from 'fs';
+import { join, delimiter } from 'path';
 
 export interface GitNexusContext {
   projectRoot: string;
@@ -48,11 +48,28 @@ interface CypherOutput {
  * Run a Cypher query via `gitnexus cypher` and return parsed row objects.
  * Returns null on process error or schema error; returns [] for empty results.
  */
+// Resolve the gitnexus CLI script path by scanning PATH for the npm bin
+// directory that contains gitnexus. On Windows, .cmd shims cannot be exec'd
+// directly (EINVAL). Running the underlying JS file via process.execPath
+// (node) works on all platforms without shell:true.
+function resolveGitNexusCli(): string {
+  const shimName = process.platform === 'win32' ? 'gitnexus.cmd' : 'gitnexus';
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (!dir) continue;
+    if (existsSync(join(dir, shimName))) {
+      const cli = join(dir, 'node_modules', 'gitnexus', 'dist', 'cli', 'index.js');
+      if (existsSync(cli)) return cli;
+    }
+  }
+  return '';
+}
+const GITNEXUS_CLI = resolveGitNexusCli();
+
 function runCypher(ctx: GitNexusContext, query: string): Record<string, string>[] | null {
   try {
     const raw = execFileSync(
-      'gitnexus',
-      ['cypher', '--repo', ctx.repoName, query],
+      process.execPath,  // node — works on all platforms, no .cmd shim needed
+      [GITNEXUS_CLI, 'cypher', '--repo', ctx.repoName, query],
       {
         cwd: ctx.projectRoot,
         encoding: 'utf8',
