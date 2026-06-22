@@ -6,7 +6,7 @@ describe('runUsesModel (F2 phase-set gate)', () => {
     expect(runUsesModel(undefined)).toBe(true);
   });
   it('11b. returns true for model-using phases', () => {
-    for (const p of ['index', 'analyze', 'dedup', 'refactor']) expect(runUsesModel(p)).toBe(true);
+    for (const p of ['index', 'analyze', 'dedup']) expect(runUsesModel(p)).toBe(true);
   });
   it('11c. returns false for the model-free aggregate phase', () => {
     expect(runUsesModel('aggregate')).toBe(false);

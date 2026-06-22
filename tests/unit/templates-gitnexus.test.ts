@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { indexPrompt, refactorPrompt } from '../../src/prompts/templates.js';
+import { indexPrompt } from '../../src/prompts/templates.js';
 import type { FileStructure } from '../../src/gitnexus.js';
-import type { IndexOutput } from '../../src/types.js';
 
 describe('indexPrompt with graphData', () => {
   it('includes dependencies and data_flow fields when graphData is absent', () => {
@@ -29,28 +28,5 @@ describe('indexPrompt with graphData', () => {
       graphData,
     );
     expect(prompt).toContain('dependencies and data_flow');
-  });
-});
-
-const emptyModules: IndexOutput[] = [];
-const emptyContents = new Map<string, string>();
-const stdMd = '# Standards\n- no globals';
-
-describe('refactorPrompt with impactedPaths', () => {
-  it('does not include dependents section when impactedPaths is absent', () => {
-    const prompt = refactorPrompt(stdMd, emptyModules, emptyContents);
-    expect(prompt).not.toContain('Known dependents');
-  });
-
-  it('includes dependents section when impactedPaths provided', () => {
-    const prompt = refactorPrompt(stdMd, emptyModules, emptyContents, ['src/a.ts', 'src/b.ts']);
-    expect(prompt).toContain('Known dependents');
-    expect(prompt).toContain('src/a.ts');
-    expect(prompt).toContain('src/b.ts');
-  });
-
-  it('does not include dependents section when impactedPaths is empty array', () => {
-    const prompt = refactorPrompt(stdMd, emptyModules, emptyContents, []);
-    expect(prompt).not.toContain('Known dependents');
   });
 });

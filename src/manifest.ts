@@ -20,8 +20,8 @@ export function createManifest(projectRoot: string, files: FileEntry[]): Manifes
     last_run: now,
     project_root: projectRoot,
     files,
-    batches: { index: [], analyze: [], dedup: [], refactor: [] },
-    phases: { index: 'pending', analyze: 'pending', dedup: 'pending', aggregate: 'pending', refactor: 'pending' },
+    batches: { index: [], analyze: [], dedup: [] },
+    phases: { index: 'pending', analyze: 'pending', dedup: 'pending', aggregate: 'pending' },
   };
 }
 

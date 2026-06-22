@@ -4,7 +4,6 @@ import {
   deduplicatePromptPassA,
   deduplicatePromptPassB,
   aggregatePrompt,
-  refactorPrompt,
 } from '../../src/prompts/templates.js';
 import type { DedupOutput, AnalysisOutput } from '../../src/types.js';
 
@@ -85,23 +84,5 @@ describe('aggregatePrompt', () => {
   });
   it('includes refactor-strategy.md delimiter', () => {
     expect(aggregatePrompt(emptyDedup)).toContain('=== refactor-strategy.md ===');
-  });
-});
-
-describe('refactorPrompt', () => {
-  it('includes File Contents section header', () => {
-    expect(refactorPrompt('# standards', [], new Map())).toContain('File Contents:');
-  });
-  it('injects file content with === path === format', () => {
-    const contents = new Map([['src/foo.ts', 'export const x = 1;']]);
-    const prompt = refactorPrompt('# standards', [], contents);
-    expect(prompt).toContain('=== src/foo.ts ===');
-    expect(prompt).toContain('export const x = 1;');
-  });
-  it('instructs to use before_lines field', () => {
-    expect(refactorPrompt('# standards', [], new Map())).toContain('before_lines');
-  });
-  it('instructs to return structured no_violations entry', () => {
-    expect(refactorPrompt('# standards', [], new Map())).toContain('no_violations');
   });
 });

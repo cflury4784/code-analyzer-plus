@@ -1,4 +1,4 @@
-import type { AnalysisOutput, DedupOutput, IndexOutput } from '../types.js';
+import type { AnalysisOutput, DedupOutput } from '../types.js';
 import type { FileStructure } from '../gitnexus.js';
 
 /**
@@ -140,60 +140,4 @@ When producing refactor-strategy.md:
 
 Input:
 ${JSON.stringify(deduped, null, 2)}`;
-}
-
-/** @schemaVersion v1 — Output contract: JSON plan array */
-export function refactorPrompt(
-  standardsMd: string,
-  modules: IndexOutput[],
-  fileContents: Map<string, string>,
-  impactedPaths?: string[] | null,
-): string {
-  const fileBlock = [...fileContents.entries()]
-    .map(([path, content]) => `=== ${path} ===\n${content}`)
-    .join('\n\n');
-
-  const impactSection = impactedPaths && impactedPaths.length > 0
-    ? `\nKnown dependents (files that import or call into these modules -> ensure your plan accounts for them in dependencies_impacted and tests_to_validate):\n${impactedPaths.map(p => `  - ${p}`).join('\n')}\n`
-    : '';
-
-  return `You are a senior engineer. Using the standards, module summaries, and file contents below, create a refactor plan.${impactSection}
-Return a JSON array where each element is one of:
-
-Full plan entry:
-{
-  "file": "relative/path",
-  "change": "exact description of what to change",
-  "before": "verbatim lines from the source file",
-  "before_lines": "47-52",
-  "after": "updated code",
-  "dependencies_impacted": ["path"],
-  "tests_to_validate": ["description"]
-}
-
-No-violations entry:
-{
-  "file": "path",
-  "verdict": "no_violations",
-  "checks_performed": ["list of standards checked"],
-  "confidence": "high" | "medium" | "low",
-  "note": "one sentence explaining why no changes are needed"
-}
-
-Rules:
-- For "before": quote at most 5 verbatim lines from File Contents. If the change spans more lines, quote only the 2-3 most representative lines and use "..." for omitted content. Do NOT quote entire functions.
-- For "after": show only the changed lines (same 5-line limit). Do NOT rewrite the whole function.
-- Set "before_lines" to the 1-indexed line range (e.g. "47-52"). Use "NEEDS_VERIFICATION" if unsure.
-- For files with no standards violations, use the no-violations entry format.
-- Maximum 3 plan entries per file. Pick the highest-impact violations only.
-Return ONLY a JSON array.
-
-Standards:
-${standardsMd}
-
-Module Summaries:
-${JSON.stringify(modules, null, 2)}
-
-File Contents:
-${fileBlock}`;
 }

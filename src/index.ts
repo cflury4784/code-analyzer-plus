@@ -8,7 +8,6 @@ import { runIndexPhase } from './phases/index.js';
 import { runAnalyzePhase } from './phases/analyze.js';
 import { runDedupPhase } from './phases/dedup.js';
 import { runAggregatePhase } from './phases/aggregate.js';
-import { runRefactorPhase } from './phases/refactor.js';
 import { DEFAULT_MODEL } from './models.js';
 import { ensureModelReady, resolveLoadedIdentifier } from './preflight.js';
 import { runUsesModel } from './run-plan.js';
@@ -127,7 +126,7 @@ async function main() {
     writeManifest(projectRoot, manifest);
     logger.info('Discovery complete', { files: files.length });
   } else if (phase && !resume) {
-    resetPhase(projectRoot, phase as 'index' | 'analyze' | 'dedup' | 'aggregate' | 'refactor');
+    resetPhase(projectRoot, phase as 'index' | 'analyze' | 'dedup' | 'aggregate');
     logger.info(`Phase ${phase} reset`);
   }
 
@@ -190,15 +189,7 @@ async function main() {
     }
   }
 
-  if (!phase || phase === 'refactor') {
-    const m = readManifest(projectRoot);
-    if (m.phases.refactor !== 'completed') {
-      const resolvedModel = await resolveLoadedIdentifier(model, numCtx, logger, { readOnly: skipPreflight });
-      await runRefactorPhase(projectRoot, resolvedModel, logger, undefined, timeoutMs, numCtx, runController.signal, gitNexusCtx);
-    }
-  }
-
-  logger.info('Pipeline complete');
+  logger.info('Pipeline complete — standards.md and refactor-strategy.md ready');
 }
 
 main().catch(err => {

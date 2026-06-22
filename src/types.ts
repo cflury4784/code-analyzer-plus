@@ -1,6 +1,6 @@
 export type PhaseStatus = 'pending' | 'completed' | 'failed';
-export type Phase = 'index' | 'analyze' | 'dedup' | 'aggregate' | 'refactor';
-export type BatchPhase = 'index' | 'analyze' | 'dedup' | 'refactor';
+export type Phase = 'index' | 'analyze' | 'dedup' | 'aggregate';
+export type BatchPhase = 'index' | 'analyze' | 'dedup';
 
 export interface FileEntry {
   path: string;
@@ -56,14 +56,12 @@ export interface Manifest {
     index: BatchEntry[];
     analyze: BatchEntry[];
     dedup: BatchEntry[];
-    refactor: BatchEntry[];
   };
   phases: {
     index: PhaseStatus;
     analyze: PhaseStatus;
     dedup: PhaseStatus;
     aggregate: PhaseStatus;
-    refactor: PhaseStatus;
   };
 }
 
@@ -84,21 +82,3 @@ export interface AnalysisOutput {
   candidate_shared_components: Candidate[];
   candidate_utility_functions: Candidate[];
 }
-
-export type RefactorPlanEntry =
-  | {
-      file: string;
-      change: string;
-      before: string;
-      before_lines?: string;
-      after: string;
-      dependencies_impacted: string[];
-      tests_to_validate: string[];
-    }
-  | {
-      file: string;
-      verdict: 'no_violations';
-      checks_performed: string[];
-      confidence: 'high' | 'medium' | 'low';
-      note?: string;
-    };

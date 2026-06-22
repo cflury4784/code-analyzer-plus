@@ -1,8 +1,8 @@
 # code-analyzer+
 
-A local, LLM-powered codebase analysis and refactor-planning tool. Runs a five-phase pipeline against any TypeScript/JavaScript project and produces a structured refactor plan grounded in your own coding standards.
+A local, LLM-powered codebase analysis tool. Runs a four-phase pipeline against any TypeScript/JavaScript project and produces two deliverables: a coding-standards document (`standards.md`) and a prioritized refactor strategy (`refactor-strategy.md`), both grounded in cross-file analysis of your codebase.
 
-Extends [code-analyzer](https://github.com/cflury4784/code-analyzer) with optional **GitNexus** integration — when a `.gitnexus/` knowledge graph is present, the pipeline uses structural graph data to group related files together, inject accurate dependency lists, and surface blast-radius context in every refactor prompt.
+Extends [code-analyzer](https://github.com/cflury4784/code-analyzer) with optional **GitNexus** integration — when a `.gitnexus/` knowledge graph is present, the pipeline uses structural graph data to group related files together and inject accurate dependency lists into the analysis.
 
 ---
 
@@ -62,7 +62,7 @@ On first run, the tool:
 1. Checks for a `.gitnexus/` index in the target project — prompts to continue without it if absent
 2. Verifies LM Studio is running and the model is loaded (auto-loads if needed)
 3. Discovers source files and creates `code-analysis/manifest.json`
-4. Runs all five phases sequentially, writing results to `code-analysis/`
+4. Runs all four phases sequentially, writing results to `code-analysis/`
 
 ---
 
@@ -73,7 +73,6 @@ If the target project has been indexed by GitNexus (`npx gitnexus analyze`), cod
 - **Refreshes the index** before the pipeline starts (`npx gitnexus analyze`)
 - **Index phase** — injects graph-derived `dependencies` (actual import paths from the AST) into each file's index entry instead of asking the LLM to infer them
 - **Analyze phase** — groups files by their community cluster (modules that import each other heavily) instead of naive byte-size grouping; related files are analyzed together, improving cross-file pattern detection
-- **Refactor phase** — fetches the reverse-dependency graph for each batch and injects a "Known dependents" section into each prompt so the LLM accounts for downstream impact
 
 Without a `.gitnexus/` index, the tool falls back to the original behavior: byte-based batching, LLM-inferred dependencies, no impact context. The fallback is transparent — no features are removed, only enrichment is skipped.
 
@@ -96,8 +95,7 @@ Then run code-analyzer+ — it picks up the index automatically.
 | **1 — Index** | `code-analysis/index/` | Each file is summarized: responsibilities, UI patterns, duplication candidates, inconsistencies. With GitNexus: accurate `dependencies` injected from the import graph. |
 | **2 — Analyze** | `code-analysis/analyzer/` | Index entries are grouped and cross-analyzed for patterns, shared anti-patterns, and architectural inconsistencies. With GitNexus: files grouped by community cluster. |
 | **2.5 — Dedup** | `code-analysis/dedup/` | Duplicate findings across analyze batches are merged and deduplicated. |
-| **3 — Aggregate** | `code-analysis/aggregate/` | All findings consolidated into a single ranked summary. |
-| **4 — Refactor** | `code-analysis/refactor/` | Per-file refactor plans generated against your `standards.md`. With GitNexus: "Known dependents" section added to each prompt so impact is considered. |
+| **3 — Aggregate** | `code-analysis/aggregate/` | All findings consolidated into two deliverables: `standards.md` (a coding-standards document) and `refactor-strategy.md` (a prioritized, phased refactor strategy). This is the final phase. |
 
 Results accumulate in `code-analysis/` inside the target project. Logs are written to `code-analysis/logs/run.log`.
 
@@ -107,7 +105,7 @@ Results accumulate in `code-analysis/` inside the target project. Logs are writt
 
 ```
 --model-override <name>   Use a specific model key (default: qwen3.6-35b-a3b)
---phase <name>            Run only one phase: index | analyze | dedup | aggregate | refactor
+--phase <name>            Run only one phase: index | analyze | dedup | aggregate
 --resume                  Resume an in-progress phase (skip completed batches)
 --max-batch-size <bytes>  Max bytes per index batch (default: 8000)
 --timeout <seconds>       Per-batch LLM timeout (default: 600)
@@ -118,10 +116,10 @@ Results accumulate in `code-analysis/` inside the target project. Logs are writt
 
 ### Examples
 
-Run only the refactor phase (assumes index/analyze/dedup/aggregate are done):
+Run only the aggregate phase (assumes index/analyze/dedup are done):
 
 ```bash
-node dist/index.js --phase refactor
+node dist/index.js --phase aggregate
 ```
 
 Resume a failed index phase:
@@ -165,38 +163,23 @@ code-analysis/
 │   └── group-001.json     # cross-file analysis
 ├── dedup/
 │   └── dedup-001.json
-├── aggregate/
-│   └── summary.json
-└── refactor/
-    └── plan-001.md        # refactor plans (one per analyze group)
+└── aggregate/
+    ├── standards.md          # generated coding-standards document
+    └── refactor-strategy.md  # generated prioritized refactor strategy
 ```
 
-Each refactor plan entry includes:
-- `file` — relative path
-- `change` — exact description of what to change
-- `before` / `after` — verbatim lines from the source
-- `before_lines` — 1-indexed line range
-- `dependencies_impacted` — files the change may affect
-- `tests_to_validate` — suggested test cases
-
-Files with no violations produce a `no_violations` entry with a confidence rating.
+The two files under `aggregate/` are the tool's final deliverables.
 
 ---
 
-## Standards File
+## Deliverables
 
-The refactor phase looks for a `standards.md` in the target project root. This file defines your coding standards — naming conventions, architectural rules, patterns to enforce or avoid. If absent, the LLM uses general best practices.
+The aggregate phase produces two documents in `code-analysis/aggregate/`:
 
-Example `standards.md` excerpt:
+- **`standards.md`** — an opinionated coding-standards document inferred from the patterns and inconsistencies found across your codebase (naming conventions, architectural rules, patterns to enforce or avoid).
+- **`refactor-strategy.md`** — a prioritized, phased refactor strategy. Phases are ordered by severity and by how many independent analysis passes converged on each finding, so the highest-confidence, highest-impact work surfaces first.
 
-```markdown
-# Standards
-
-- No default exports — use named exports only
-- All async functions must have explicit return types
-- React components: props interface declared above the component
-- No inline styles — use CSS modules or Tailwind only
-```
+Both are grounded in the cross-file analysis from the earlier phases — they are outputs, not inputs you supply.
 
 ---
 

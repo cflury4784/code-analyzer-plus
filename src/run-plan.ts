@@ -1,5 +1,5 @@
 /** Phases that call the local model via LM Studio. `aggregate` uses the Claude CLI, not LM Studio. */
-export const MODEL_USING_PHASES = ['index', 'analyze', 'dedup', 'refactor'] as const;
+export const MODEL_USING_PHASES = ['index', 'analyze', 'dedup'] as const;
 
 /**
  * Whether a run uses the local model. `phase === undefined` means "run all phases" (which

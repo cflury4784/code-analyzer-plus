@@ -6,6 +6,7 @@ import { FILE_SIZE_LIMIT_BYTES } from '../config/constants.js';
 
 const ALWAYS_EXCLUDED = new Set([
   'code-analysis', '.git',
+  '.gitnexus',     // GitNexus index metadata — generated, never a refactor target
   '.superpowers',  // tooling artifacts (brainstorms, plans, archived analyses)
   '.claude',       // IDE settings — never source code
 ]);
