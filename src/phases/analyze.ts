@@ -4,15 +4,20 @@ import { readManifest, writeManifest, updateBatchStatus, updatePhaseStatus } fro
 import { callLMStudio } from '../lm-studio.js';
 import { withRetry } from '../retry.js';
 import { analyzePrompt } from '../prompts/templates.js';
+import { getCommunities } from '../gitnexus.js';
 import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, IndexOutput } from '../types.js';
+import type { GitNexusContext } from '../gitnexus.js';
 import { calculateSafeMaxTokens } from '../utils.js';
 
 const MAX_ATTEMPTS = 3;
 const MAX_GROUP_BYTES = 20000;
 const DEFAULT_NUM_CTX = 32000;
 
-function groupIndexOutputs(projectRoot: string): { batches: BatchEntry[]; groups: IndexOutput[][] } {
+async function groupIndexOutputs(
+  projectRoot: string,
+  gitNexusCtx?: GitNexusContext | null,
+): Promise<{ batches: BatchEntry[]; groups: IndexOutput[][] }> {
   const manifest = readManifest(projectRoot);
   const allItems: IndexOutput[] = [];
 
@@ -24,6 +29,90 @@ function groupIndexOutputs(projectRoot: string): { batches: BatchEntry[]; groups
     }
   }
 
+  const groups: IndexOutput[][] = [];
+
+  if (gitNexusCtx) {
+    // Community-based grouping
+    const communities = await getCommunities(gitNexusCtx);
+    if (communities && communities.size > 0) {
+      // Build reverse map: posix file path -> community name
+      const fileToComm = new Map<string, string>();
+      for (const [comm, files] of communities) {
+        for (const f of files) fileToComm.set(f.replace(/\\/g, '/'), comm);
+      }
+
+      const commGroups = new Map<string, IndexOutput[]>();
+      const overflow: IndexOutput[] = [];
+
+      for (const item of allItems) {
+        const posixPath = (item.module ?? '').replace(/\\/g, '/');
+        const comm = fileToComm.get(posixPath);
+        if (comm) {
+          if (!commGroups.has(comm)) commGroups.set(comm, []);
+          commGroups.get(comm)!.push(item);
+        } else {
+          overflow.push(item);
+        }
+      }
+
+      // Sub-split each community by bytes if it exceeds MAX_GROUP_BYTES
+      for (const [, items] of commGroups) {
+        let current: IndexOutput[] = [];
+        let currentSize = 0;
+        for (const item of items) {
+          const size = JSON.stringify(item).length;
+          if (currentSize + size > MAX_GROUP_BYTES && current.length > 0) {
+            groups.push(current);
+            current = [item];
+            currentSize = size;
+          } else {
+            current.push(item);
+            currentSize += size;
+          }
+        }
+        if (current.length > 0) groups.push(current);
+      }
+
+      // Overflow items: fallback byte grouping
+      let current: IndexOutput[] = [];
+      let currentSize = 0;
+      for (const item of overflow) {
+        const size = JSON.stringify(item).length;
+        if (currentSize + size > MAX_GROUP_BYTES && current.length > 0) {
+          groups.push(current);
+          current = [item];
+          currentSize = size;
+        } else {
+          current.push(item);
+          currentSize += size;
+        }
+      }
+      if (current.length > 0) groups.push(current);
+    } else {
+      // getCommunities returned null or empty -> fall through to byte grouping
+      return byteGroupIndexOutputs(allItems);
+    }
+  } else {
+    return byteGroupIndexOutputs(allItems);
+  }
+
+  const batches: BatchEntry[] = groups.map((group, i) => {
+    const id = `group-${String(i + 1).padStart(3, '0')}`;
+    return {
+      id,
+      files: [],
+      size_bytes: JSON.stringify(group).length,
+      status: 'pending' as const,
+      attempts: 0,
+      completed_at: null,
+      output_file: `code-analysis/analyzer/${id}.json`,
+    };
+  });
+
+  return { batches, groups };
+}
+
+function byteGroupIndexOutputs(allItems: IndexOutput[]): { batches: BatchEntry[]; groups: IndexOutput[][] } {
   const groups: IndexOutput[][] = [];
   let current: IndexOutput[] = [];
   let currentSize = 0;
@@ -65,19 +154,21 @@ export async function runAnalyzePhase(
   timeoutMs?: number,
   numCtx?: number,
   signal?: AbortSignal,
+  gitNexusCtx?: GitNexusContext | null,
 ): Promise<void> {
   let manifest = readManifest(projectRoot);
 
   const noAnalyzeProgress = manifest.batches.analyze.length === 0 ||
     manifest.batches.analyze.every(b => b.status !== 'completed');
-  if (noAnalyzeProgress) {
-    const { batches } = groupIndexOutputs(projectRoot);
-    manifest.batches.analyze = batches;
-    writeManifest(projectRoot, manifest);
-  }
 
-  manifest = readManifest(projectRoot);
-  const { groups } = groupIndexOutputs(projectRoot);
+  // Single call -> reuse batches for manifest and groups for processing
+  const { batches: computedBatches, groups } = await groupIndexOutputs(projectRoot, gitNexusCtx);
+
+  if (noAnalyzeProgress) {
+    manifest.batches.analyze = computedBatches;
+    writeManifest(projectRoot, manifest);
+    manifest = readManifest(projectRoot);
+  }
   const total = manifest.batches.analyze.length;
   const pending = manifest.batches.analyze.filter(b => b.status !== 'completed').length;
   logger.info('Phase 2 — Analysis', { model, groups: total, pending });
