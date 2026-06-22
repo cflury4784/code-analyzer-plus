@@ -2,8 +2,14 @@
   "name": "code-analyzer",
   "version": "0.1.0",
   "type": "module",
+  "files": [
+    "dist",
+    "config",
+    "src",
+    "README.md"
+  ],
   "bin": {
-    "code-analyzer": "./dist/index.js"
+    "code-analyzer": "./dist/src/index.js"
   },
   "scripts": {
     "build": "tsc",

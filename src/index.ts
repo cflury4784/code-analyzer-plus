@@ -28,7 +28,7 @@ const args = minimist(process.argv.slice(2), {
 if (args['version']) {
   const { createRequire } = await import('module');
   const req = createRequire(import.meta.url);
-  const pkg = req('../package.json') as { version: string };
+  const pkg = req('../../package.json') as { version: string };
   console.log(pkg.version);
   process.exit(0);
 }
