@@ -12,16 +12,18 @@ import {
   resetPhase,
 } from '../../src/manifest.js';
 import type { FileEntry } from '../../src/types.js';
+import { setupTempFs, type TempFsResult } from '../utils/TestEnvironmentManager.js';
 
 let testRoot: string;
+let tempFs: TempFsResult;
 
 beforeEach(() => {
-  testRoot = join(tmpdir(), `manifest-test-${Date.now()}`);
-  mkdirSync(testRoot, { recursive: true });
+  tempFs = setupTempFs('manifest-test');
+  testRoot = tempFs.root;
 });
 
 afterEach(() => {
-  rmSync(testRoot, { recursive: true, force: true });
+  tempFs.cleanup();
 });
 
 describe('manifestExists', () => {

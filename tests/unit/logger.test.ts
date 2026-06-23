@@ -2,14 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../../src/logger.js';
-import { createTempFileSystemSetup, type TempFsResult } from '../utils/fsHelpers.js';
-import { restoreEnvVars } from '../utils/envHelpers.js';
+import { setupTempFs, restoreEnvVars, type TempFsResult } from '../utils/TestEnvironmentManager.js';
 
 let fs: TempFsResult;
 let logPath: string;
 
 beforeEach(() => {
-  fs = createTempFileSystemSetup('logger-test');
+  fs = setupTempFs('logger-test');
   logPath = join(fs.root, 'run.log');
 });
 

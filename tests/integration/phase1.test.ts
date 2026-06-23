@@ -8,8 +8,10 @@ import { discoverFiles } from '../../src/discovery.js';
 import { createManifest, writeManifest, readManifest } from '../../src/manifest.js';
 import { createBatches } from '../../src/batcher.js';
 import { runIndexPhase } from '../../src/phases/index.js';
+import { NodeFileSystemService } from '../../src/fs-service.js';
 import { PhaseOrchestrator } from '../../src/phase-orchestrator.js';
 import { createLogger } from '../../src/logger.js';
+import { setupTempFs, type TempFsResult } from '../utils/TestEnvironmentManager.js';
 
 const MOCK_INDEX_ITEM = {
   module: 'src/utils/helper.ts',
@@ -31,13 +33,15 @@ function sseResponse(content: string): HttpResponse {
 const LM_URL = 'http://localhost:1234/v1/chat/completions';
 const server = setupServer();
 let testRoot: string;
+let tempFs: TempFsResult | undefined;
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 function setupProject() {
-  testRoot = join(tmpdir(), `phase1-test-${Date.now()}`);
+  tempFs = setupTempFs('phase1-test');
+  testRoot = tempFs.root;
   mkdirSync(join(testRoot, 'src', 'utils'), { recursive: true });
   writeFileSync(join(testRoot, 'src', 'utils', 'helper.ts'), 'export const x = 1;');
 
@@ -52,7 +56,7 @@ function setupProject() {
 }
 
 afterEach(() => {
-  if (testRoot) rmSync(testRoot, { recursive: true, force: true });
+  if (tempFs) tempFs.cleanup();
 });
 
 describe('runIndexPhase', () => {
@@ -61,7 +65,8 @@ describe('runIndexPhase', () => {
     const logger = createLogger(join(testRoot, 'code-analysis', 'logs', 'run.log'));
 
     const orchestrator = new PhaseOrchestrator(testRoot, logger);
-    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
+    const fsService = new NodeFileSystemService();
+    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, fsService, LM_URL);
 
     const manifest = readManifest(testRoot);
     expect(manifest.phases.index).toBe('completed');
@@ -88,7 +93,8 @@ describe('runIndexPhase', () => {
 
     const logger = createLogger(join(testRoot, 'code-analysis', 'logs', 'run.log'));
     const orchestrator = new PhaseOrchestrator(testRoot, logger);
-    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
+    const fsService = new NodeFileSystemService();
+    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, fsService, LM_URL);
 
     expect(callCount).toBe(0);
   });
@@ -101,7 +107,8 @@ describe('runIndexPhase', () => {
 
     const logger = createLogger(join(testRoot, 'code-analysis', 'logs', 'run.log'));
     const orchestrator = new PhaseOrchestrator(testRoot, logger);
-    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
+    const fsService = new NodeFileSystemService();
+    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, fsService, LM_URL);
 
     expect(readManifest(testRoot).phases.index).toBe('failed');
   }, 15000);

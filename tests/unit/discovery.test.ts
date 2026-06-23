@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { discoverFiles } from '../../src/discovery.js';
-import { createTempFileSystemSetup, type TempFsResult } from '../utils/fsHelpers.js';
+import { setupTempFs, type TempFsResult } from '../utils/TestEnvironmentManager.js';
 import { FILE_SIZE_LIMIT_BYTES } from '../../config/constants.js';
 
 let fs: TempFsResult;
 
 beforeEach(() => {
-  fs = createTempFileSystemSetup('discovery-test');
+  fs = setupTempFs('discovery-test');
 });
 
 afterEach(() => {
