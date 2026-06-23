@@ -5,6 +5,7 @@ import { DEFAULT_MODEL } from './models.js';
 import { join } from 'path';
 import { closeGitNexus } from './gitnexus.js';
 import { detectGitNexus } from './process-helpers.js';
+import { killAll } from './child-registry.js';
 import { PhaseOrchestrator } from './phase-orchestrator.js';
 
 const args = minimist(process.argv.slice(2), {
@@ -44,6 +45,7 @@ const logger = createLogger(join(projectRoot, 'code-analysis', 'logs', 'run.log'
 const runController = new AbortController();
 const handleSignal = (sig: string) => {
   logger.info(`${sig} received — cancelling run`);
+  killAll();
   runController.abort();
   setTimeout(() => process.exit(sig === 'SIGINT' ? 130 : 143), 3000).unref();
 };
@@ -51,7 +53,7 @@ process.once('SIGINT', () => handleSignal('SIGINT'));
 process.once('SIGTERM', () => handleSignal('SIGTERM'));
 
 async function main() {
-  const gitNexusCtx = await detectGitNexus(projectRoot, logger);
+  const gitNexusCtx = await detectGitNexus(projectRoot, logger, resume);
   process.once('exit', () => { if (gitNexusCtx) closeGitNexus(gitNexusCtx); });
   process.once('uncaughtException', (e) => { if (gitNexusCtx) closeGitNexus(gitNexusCtx); throw e; });
 

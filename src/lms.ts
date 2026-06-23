@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { register } from './child-registry.js';
 
 export interface LoadedModel {
   identifier: string;
@@ -26,6 +27,7 @@ export async function runLms(args: string[], opts: RunOpts = {}): Promise<string
   return new Promise<string>((resolve, reject) => {
     const cmd = 'lms ' + args.join(' ');
     const proc = spawn(cmd, [], { shell: true } as Parameters<typeof spawn>[2]);
+    register(proc);
 
     let stdout = '';
     let stderr = '';

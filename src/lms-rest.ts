@@ -103,9 +103,10 @@ export async function load(
   opts: LoadOpts,
   _deps?: { runLms: RunLms },
 ): Promise<void> {
-  // Load timeout override chain: opts.timeoutMs → LMS_LOAD_TIMEOUT_MS env → default REST timeout
+  // Load timeout override chain: opts.timeoutMs → LMS_LOAD_TIMEOUT_MS env → 10 min default
+  // ROCm cold start can exceed 60s; 10s base REST default is too short for /models/load.
   const timeoutMs = opts.timeoutMs
-    ?? Number(process.env['LMS_LOAD_TIMEOUT_MS'] ?? _restDefaults.timeoutMs);
+    ?? Number(process.env['LMS_LOAD_TIMEOUT_MS'] ?? 600_000);
   const res = await apiFetch(
     '/models/load',
     {

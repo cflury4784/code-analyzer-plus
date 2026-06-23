@@ -5,6 +5,7 @@ import * as readline from 'readline';
 import { openGitNexus } from './gitnexus.js';
 import type { GitNexusContext } from './gitnexus.js';
 import type { Logger } from './logger.js';
+import { register } from './child-registry.js';
 
 export function spawnAsync(
   cmd: string,
@@ -13,6 +14,7 @@ export function spawnAsync(
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, { ...opts, stdio: 'inherit' });
+    register(proc);
     proc.on('close', resolve);
     proc.on('error', reject);
   });
@@ -21,6 +23,7 @@ export function spawnAsync(
 export async function detectGitNexus(
   projectRoot: string,
   logger: Logger,
+  resume = false,
 ): Promise<GitNexusContext | null> {
   const dbPath = join(projectRoot, '.gitnexus');
 
@@ -43,6 +46,13 @@ export async function detectGitNexus(
       process.exit(0);
     }
     return null;
+  }
+
+  if (resume) {
+    logger.info('GitNexus index found — skipping refresh (resume run)');
+    const ctx = await openGitNexus(projectRoot);
+    if (!ctx) logger.warn('GitNexus schema probe failed or DB locked — skipping enrichment');
+    return ctx;
   }
 
   logger.info('GitNexus index found — running npx gitnexus analyze to refresh');
