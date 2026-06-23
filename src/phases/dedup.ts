@@ -4,17 +4,14 @@ import { deduplicatePromptPassA, deduplicatePromptPassB } from '../prompts/templ
 import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, DedupOutput } from '../types.js';
 import { extractJson } from '../utils/index.js';
+import { calculateSafeMaxTokens } from '../utils.js';
 import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const MAX_GROUP_BYTES = 12000;  // smaller batches → smaller output → less truncation risk
 const DEFAULT_NUM_CTX = 32000;
 const MAX_OUTPUT_TOKENS = 6000;  // dedup responses are large JSON objects
 
-function safeMaxTokens(promptLen: number, numCtx: number, cap: number): number {
-  const inputTokens = Math.ceil(promptLen / 3.5);
-  const available = Math.floor(numCtx * 0.85) - inputTokens;
-  return Math.max(500, Math.min(available, cap));
-}
+
 
 function buildDedupBatches(projectRoot: string, fs: FileSystemService): { batches: BatchEntry[]; passAGroups: AnalysisOutput[][] } {
   const manifest = readManifest(projectRoot);
@@ -100,7 +97,7 @@ export async function runDedupPhase(
     const result = await orchestrator.runWithRetry(
       async () => {
         const prompt = deduplicatePromptPassA(groupItems);
-        const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
+        const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
         const parsed = extractJson(raw) as DedupOutput;
         fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'dedup'));
@@ -153,7 +150,7 @@ export async function runDedupPhase(
       const merged = await orchestrator.runWithRetry(
         async () => {
           const prompt = deduplicatePromptPassB(chunk);
-          const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
+        const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
           const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
           return extractJson(raw) as DedupOutput;
         },

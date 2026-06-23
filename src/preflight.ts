@@ -1,6 +1,7 @@
 import { spawnSync } from 'child_process';
 import { totalmem as osTotalmem, freemem as osFreemem } from 'os';
-import { MODEL_REGISTRY, type ModelSpec, FREE_FLOOR_GB, ESTIMATE_MARGIN_GB } from './models.js';
+import { FREE_FLOOR_GB, ESTIMATE_MARGIN_GB } from './models.js';
+import { resolveModelIdentifier } from './utils/index.js';
 import { lmsRest as defaultLms } from './lms-rest.js';
 import type { Lms } from './lms.js';
 import type { Logger } from './logger.js';
@@ -53,21 +54,6 @@ const defaultDeps: PreflightDeps = {
 
 const toGiB = (bytes: number): number => bytes / 1024 ** 3;
 const round1 = (n: number): number => Math.round(n * 10) / 10;
-const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/** Registry lookup, or an ad-hoc spec for an unknown --model-override (F4). */
-function resolveSpec(modelName: string): { spec: ModelSpec; known: boolean } {
-  const known = MODEL_REGISTRY[modelName];
-  if (known) return { spec: known, known: true };
-  return {
-    spec: {
-      loadKey: modelName,
-      identifierMatch: new RegExp(escapeRegex(modelName), 'i'),
-      requiredTotalGB: 0, // computed at the resource-check step for unknown overrides
-    },
-    known: false,
-  };
-}
 
 /**
  * Ensure the server is up and `modelName` is loaded; return the live identifier `lms ps`
@@ -80,7 +66,7 @@ export async function ensureModelReady(
   logger: Logger,
   deps: PreflightDeps = defaultDeps,
 ): Promise<string> {
-  const { spec, known } = resolveSpec(modelName);
+  const { spec, known } = resolveModelIdentifier(modelName);
 
   // 1. If server is already running, check for an existing load first — fast exit with no
   //    unload/reload needed. We probe without starting the server so a capacity failure never
@@ -166,7 +152,7 @@ export async function resolveLoadedIdentifier(
   opts: { readOnly: boolean },
   deps: PreflightDeps = defaultDeps,
 ): Promise<string> {
-  const { spec } = resolveSpec(modelName);
+  const { spec } = resolveModelIdentifier(modelName);
   const status = await deps.lms.serverStatus();
   if (status.running) {
     const loaded = await deps.lms.listLoaded();

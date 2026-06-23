@@ -6,7 +6,7 @@ import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, IndexOutput } from '../types.js';
 import type { GitNexusContext } from '../gitnexus.js';
 import { calculateSafeMaxTokens } from '../utils.js';
-import { extractJson } from '../utils/index.js';
+import { extractJson, groupByByteSize } from '../utils/index.js';
 import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const MAX_GROUP_BYTES = 20000;
@@ -56,37 +56,11 @@ async function groupIndexOutputs(
 
       // Sub-split each community by bytes if it exceeds MAX_GROUP_BYTES
       for (const [, items] of commGroups) {
-        let current: IndexOutput[] = [];
-        let currentSize = 0;
-        for (const item of items) {
-          const size = JSON.stringify(item).length;
-          if (currentSize + size > MAX_GROUP_BYTES && current.length > 0) {
-            groups.push(current);
-            current = [item];
-            currentSize = size;
-          } else {
-            current.push(item);
-            currentSize += size;
-          }
-        }
-        if (current.length > 0) groups.push(current);
+        groups.push(...groupByByteSize(items, MAX_GROUP_BYTES));
       }
 
       // Overflow items: fallback byte grouping
-      let current: IndexOutput[] = [];
-      let currentSize = 0;
-      for (const item of overflow) {
-        const size = JSON.stringify(item).length;
-        if (currentSize + size > MAX_GROUP_BYTES && current.length > 0) {
-          groups.push(current);
-          current = [item];
-          currentSize = size;
-        } else {
-          current.push(item);
-          currentSize += size;
-        }
-      }
-      if (current.length > 0) groups.push(current);
+      groups.push(...groupByByteSize(overflow, MAX_GROUP_BYTES));
     } else {
       // getCommunities returned null or empty -> fall through to byte grouping
       return byteGroupIndexOutputs(allItems);
@@ -112,22 +86,7 @@ async function groupIndexOutputs(
 }
 
 function byteGroupIndexOutputs(allItems: IndexOutput[]): { batches: BatchEntry[]; groups: IndexOutput[][] } {
-  const groups: IndexOutput[][] = [];
-  let current: IndexOutput[] = [];
-  let currentSize = 0;
-
-  for (const item of allItems) {
-    const size = JSON.stringify(item).length;
-    if (currentSize + size > MAX_GROUP_BYTES && current.length > 0) {
-      groups.push(current);
-      current = [item];
-      currentSize = size;
-    } else {
-      current.push(item);
-      currentSize += size;
-    }
-  }
-  if (current.length > 0) groups.push(current);
+  const groups = groupByByteSize(allItems, MAX_GROUP_BYTES);
 
   const batches: BatchEntry[] = groups.map((group, i) => {
     const id = `group-${String(i + 1).padStart(3, '0')}`;
