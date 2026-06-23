@@ -7,6 +7,7 @@ import { extractJson } from '../utils/index.js';
 import { calculateSafeMaxTokens } from '../utils.js';
 import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
+import { runPhaseBatches } from './phase-runner.js';
 const MAX_GROUP_BYTES = 12000;  // smaller batches → smaller output → less truncation risk
 const DEFAULT_NUM_CTX = 32000;
 const MAX_OUTPUT_TOKENS = 6000;  // dedup responses are large JSON objects
@@ -85,40 +86,23 @@ export async function runDedupPhase(
   const pending = m.batches.dedup.filter(b => b.status !== 'completed').length;
   logger.info('Phase 2.5 Pass A', { batches: total, pending });
 
-  let passAFailed = 0;
-  let doneCount = total - pending;
-
-  for (let i = 0; i < m.batches.dedup.length; i++) {
-    const batch = m.batches.dedup[i];
-    if (batch.status === 'completed') continue;
-
-    const groupItems = passAGroups[i] ?? [];
-
-    const result = await orchestrator.runWithRetry(
-      async () => {
-        const prompt = deduplicatePromptPassA(groupItems);
-        const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
-        const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
-        const parsed = extractJson(raw) as DedupOutput;
-        fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'dedup'));
-        fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2));
-        return parsed;
-      },
-      (attempt, err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`${batch.id} failed (attempt ${attempt}/${orchestrator.maxAttempts})`, { error: msg });
-      },
-    );
-
-    if (result) {
-      doneCount++;
-      updateBatchStatus(projectRoot, 'dedup', batch.id, 'completed', result.attempts);
-      logger.info(`${batch.id} done (${doneCount}/${total})`);
-    } else {
-      updateBatchStatus(projectRoot, 'dedup', batch.id, 'failed', orchestrator.maxAttempts);
-      passAFailed++;
-    }
-  }
+  const { failedCount: passAFailed } = await runPhaseBatches<DedupOutput>({
+    orchestrator,
+    projectRoot,
+    phase: 'dedup',
+    batches: m.batches.dedup,
+    logger,
+    work: async (batch, i) => {
+      const groupItems = passAGroups[i] ?? [];
+      const prompt = deduplicatePromptPassA(groupItems);
+      const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
+      const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
+      const parsed = extractJson(raw) as DedupOutput;
+      fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'dedup'));
+      fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2));
+      return parsed;
+    },
+  });
 
   if (passAFailed > 0) {
     logger.error('Phase 2.5 Pass A had failures — cannot proceed to Pass B', { failed: passAFailed });

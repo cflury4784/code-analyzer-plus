@@ -9,6 +9,7 @@ import { calculateSafeMaxTokens } from '../utils.js';
 import { extractJson, groupByByteSize } from '../utils/index.js';
 import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
+import { runPhaseBatches } from './phase-runner.js';
 const MAX_GROUP_BYTES = 20000;
 const DEFAULT_NUM_CTX = 32000;
 
@@ -132,40 +133,23 @@ export async function runAnalyzePhase(
   const total = manifest.batches.analyze.length;
   const pending = manifest.batches.analyze.filter(b => b.status !== 'completed').length;
   logger.info('Phase 2 — Analysis', { model, groups: total, pending });
-  let failedCount = 0;
-  let doneCount = total - pending;
-
-  for (let i = 0; i < manifest.batches.analyze.length; i++) {
-    const batch = manifest.batches.analyze[i];
-    if (batch.status === 'completed') continue;
-
-    const groupItems = groups[i] ?? [];
-
-    const result = await orchestrator.runWithRetry(
-      async () => {
-        const prompt = analyzePrompt(groupItems);
-        const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 3000);
-        const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
-        const parsed = extractJson(raw) as AnalysisOutput;
-        fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'analyzer'));
-        fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2));
-        return parsed;
-      },
-      (attempt, err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`${batch.id} failed (attempt ${attempt}/${orchestrator.maxAttempts})`, { error: msg });
-      },
-    );
-
-    if (result) {
-      doneCount++;
-      updateBatchStatus(projectRoot, 'analyze', batch.id, 'completed', result.attempts);
-      logger.info(`${batch.id} done (${doneCount}/${total})`);
-    } else {
-      updateBatchStatus(projectRoot, 'analyze', batch.id, 'failed', orchestrator.maxAttempts);
-      failedCount++;
-    }
-  }
+  const { failedCount } = await runPhaseBatches<AnalysisOutput>({
+    orchestrator,
+    projectRoot,
+    phase: 'analyze',
+    batches: manifest.batches.analyze,
+    logger,
+    work: async (batch, i) => {
+      const groupItems = groups[i] ?? [];
+      const prompt = analyzePrompt(groupItems);
+      const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 3000);
+      const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
+      const parsed = extractJson(raw) as AnalysisOutput;
+      fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'analyzer'));
+      fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2));
+      return parsed;
+    },
+  });
 
   const finalStatus = failedCount > 0 ? 'failed' : 'completed';
   updatePhaseStatus(projectRoot, 'analyze', finalStatus);
