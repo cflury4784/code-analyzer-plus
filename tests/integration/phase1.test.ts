@@ -93,6 +93,31 @@ describe('runIndexPhase', () => {
     expect(callCount).toBe(0);
   });
 
+  it('skips a batch whose files are all missing without calling the model', async () => {
+    setupProject();
+    // Point the batch at a file that does not exist on disk.
+    const manifest = readManifest(testRoot);
+    manifest.batches.index[0].files = ['src/utils/does-not-exist.ts'];
+    writeManifest(testRoot, manifest);
+
+    let callCount = 0;
+    server.use(http.post(LM_URL, () => {
+      callCount++;
+      return generatePromptFixture(JSON.stringify([MOCK_INDEX_ITEM]));
+    }));
+
+    const logger = createLogger(join(testRoot, 'code-analysis', 'logs', 'run.log'));
+    const orchestrator = new PhaseOrchestrator(testRoot, logger);
+    const fsService = new NodeFileSystemService();
+    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, fsService, LM_URL);
+
+    expect(callCount).toBe(0);
+    const after = readManifest(testRoot);
+    expect(after.batches.index[0].status).toBe('completed');
+    expect(after.batches.index[0].attempts).toBe(0);
+    expect(after.phases.index).toBe('completed');
+  });
+
   it('marks phase failed when all batches fail', async () => {
     setupProject();
     server.use(
