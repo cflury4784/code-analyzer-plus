@@ -2,12 +2,10 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { readManifest, writeManifest, updateBatchStatus, updatePhaseStatus } from '../manifest.js';
 import { callLMStudio } from '../lm-studio.js';
-import { withRetry } from '../retry.js';
 import { deduplicatePromptPassA, deduplicatePromptPassB } from '../prompts/templates.js';
 import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, DedupOutput } from '../types.js';
-
-const MAX_ATTEMPTS = 3;
+import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const MAX_GROUP_BYTES = 12000;  // smaller batches → smaller output → less truncation risk
 const DEFAULT_NUM_CTX = 32000;
 const MAX_OUTPUT_TOKENS = 6000;  // dedup responses are large JSON objects
@@ -59,6 +57,7 @@ function buildDedupBatches(projectRoot: string): { batches: BatchEntry[]; passAG
 }
 
 export async function runDedupPhase(
+  orchestrator: PhaseOrchestrator,
   projectRoot: string,
   model: string,
   logger: Logger,
@@ -97,7 +96,7 @@ export async function runDedupPhase(
 
     const groupItems = passAGroups[i] ?? [];
 
-    const result = await withRetry(
+    const result = await orchestrator.runWithRetry(
       async () => {
         const prompt = deduplicatePromptPassA(groupItems);
         const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
@@ -107,12 +106,10 @@ export async function runDedupPhase(
         writeFileSync(join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2), 'utf8');
         return parsed;
       },
-      MAX_ATTEMPTS,
       (attempt, err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`${batch.id} failed (attempt ${attempt}/${MAX_ATTEMPTS})`, { error: msg });
+        logger.error(`${batch.id} failed (attempt ${attempt}/${orchestrator.maxAttempts})`, { error: msg });
       },
-      signal,
     );
 
     if (result) {
@@ -120,7 +117,7 @@ export async function runDedupPhase(
       updateBatchStatus(projectRoot, 'dedup', batch.id, 'completed', result.attempts);
       logger.info(`${batch.id} done (${doneCount}/${total})`);
     } else {
-      updateBatchStatus(projectRoot, 'dedup', batch.id, 'failed', MAX_ATTEMPTS);
+      updateBatchStatus(projectRoot, 'dedup', batch.id, 'failed', orchestrator.maxAttempts);
       passAFailed++;
     }
   }
@@ -152,19 +149,17 @@ export async function runDedupPhase(
     for (let i = 0; i < pool.length; i += 2) {
       const chunk = pool.slice(i, i + 2);
       if (chunk.length === 1) { nextRound.push(chunk[0]); continue; }
-      const merged = await withRetry(
+      const merged = await orchestrator.runWithRetry(
         async () => {
           const prompt = deduplicatePromptPassB(chunk);
           const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
           const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
           return JSON.parse(raw) as DedupOutput;
         },
-        MAX_ATTEMPTS,
         (attempt, err) => {
           const msg = err instanceof Error ? err.message : String(err);
-          logger.error(`Pass B r${round} pair ${Math.floor(i / 2) + 1} failed (attempt ${attempt}/${MAX_ATTEMPTS})`, { error: msg });
+          logger.error(`Pass B r${round} pair ${Math.floor(i / 2) + 1} failed (attempt ${attempt}/${orchestrator.maxAttempts})`, { error: msg });
         },
-        signal,
       );
       if (!merged) {
         logger.error('Phase 2.5 Pass B failed');

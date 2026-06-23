@@ -2,14 +2,12 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { readManifest, updateBatchStatus, updatePhaseStatus } from '../manifest.js';
 import { callLMStudio } from '../lm-studio.js';
-import { withRetry } from '../retry.js';
 import { indexPrompt } from '../prompts/templates.js';
 import { getFileStructure } from '../gitnexus.js';
 import type { Logger } from '../logger.js';
 import type { IndexOutput } from '../types.js';
 import type { GitNexusContext } from '../gitnexus.js';
-
-const MAX_ATTEMPTS = 3;
+import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 
 function extractJsonArray(raw: string): string {
   const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
@@ -108,6 +106,7 @@ function extractJsonFromResponse(raw: string): string {
 }
 
 export async function runIndexPhase(
+  orchestrator: PhaseOrchestrator,
   projectRoot: string,
   model: string,
   logger: Logger,
@@ -159,13 +158,13 @@ export async function runIndexPhase(
       logger.warn(`${batch.id} prompt estimate ~${estTokens} tokens exceeds 75% of ctx=${ctxForEstimate} — consider splitting`, { files: batch.files.length, size_bytes: batch.size_bytes });
     }
 
-    const result = await withRetry(
+    const result = await orchestrator.runWithRetry(
       async () => {
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, 1500);
         const parsed = JSON.parse(extractJsonArray(raw)) as Partial<IndexOutput>[];
 
         // Guard: model sometimes returns a flat string[] (e.g. just the responsibilities
-        // array) instead of an IndexOutput[]. Throwing here lets withRetry retry the batch.
+        // array) instead of an IndexOutput[]. Throwing here lets the orchestrator retry the batch.
         if (!Array.isArray(parsed) || parsed.some(item => typeof item !== 'object' || item === null || !('module' in item))) {
           throw new Error(`model returned invalid schema: expected IndexOutput[], got ${JSON.stringify(parsed).slice(0, 120)}`);
         }
@@ -187,12 +186,10 @@ export async function runIndexPhase(
         writeFileSync(join(projectRoot, batch.output_file), JSON.stringify(enriched, null, 2), 'utf8');
         return enriched;
       },
-      MAX_ATTEMPTS,
       (attempt, err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`${batch.id} failed (attempt ${attempt}/${MAX_ATTEMPTS})`, { error: msg });
+        logger.error(`${batch.id} failed (attempt ${attempt}/${orchestrator.maxAttempts})`, { error: msg });
       },
-      signal,
     );
 
     if (result) {
@@ -200,7 +197,7 @@ export async function runIndexPhase(
       updateBatchStatus(projectRoot, 'index', batch.id, 'completed', result.attempts);
       logger.info(`${batch.id} done (${doneCount}/${total})`, { files: batch.files.length });
     } else {
-      updateBatchStatus(projectRoot, 'index', batch.id, 'failed', MAX_ATTEMPTS);
+      updateBatchStatus(projectRoot, 'index', batch.id, 'failed', orchestrator.maxAttempts);
       failedCount++;
     }
   }

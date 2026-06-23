@@ -2,15 +2,13 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { readManifest, writeManifest, updateBatchStatus, updatePhaseStatus } from '../manifest.js';
 import { callLMStudio } from '../lm-studio.js';
-import { withRetry } from '../retry.js';
 import { analyzePrompt } from '../prompts/templates.js';
 import { getCommunities } from '../gitnexus.js';
 import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, IndexOutput } from '../types.js';
 import type { GitNexusContext } from '../gitnexus.js';
 import { calculateSafeMaxTokens } from '../utils.js';
-
-const MAX_ATTEMPTS = 3;
+import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const MAX_GROUP_BYTES = 20000;
 const DEFAULT_NUM_CTX = 32000;
 
@@ -147,6 +145,7 @@ function byteGroupIndexOutputs(allItems: IndexOutput[]): { batches: BatchEntry[]
 }
 
 export async function runAnalyzePhase(
+  orchestrator: PhaseOrchestrator,
   projectRoot: string,
   model: string,
   logger: Logger,
@@ -181,7 +180,7 @@ export async function runAnalyzePhase(
 
     const groupItems = groups[i] ?? [];
 
-    const result = await withRetry(
+    const result = await orchestrator.runWithRetry(
       async () => {
         const prompt = analyzePrompt(groupItems);
         const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 3000);
@@ -191,12 +190,10 @@ export async function runAnalyzePhase(
         writeFileSync(join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2), 'utf8');
         return parsed;
       },
-      MAX_ATTEMPTS,
       (attempt, err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`${batch.id} failed (attempt ${attempt}/${MAX_ATTEMPTS})`, { error: msg });
+        logger.error(`${batch.id} failed (attempt ${attempt}/${orchestrator.maxAttempts})`, { error: msg });
       },
-      signal,
     );
 
     if (result) {
@@ -204,7 +201,7 @@ export async function runAnalyzePhase(
       updateBatchStatus(projectRoot, 'analyze', batch.id, 'completed', result.attempts);
       logger.info(`${batch.id} done (${doneCount}/${total})`);
     } else {
-      updateBatchStatus(projectRoot, 'analyze', batch.id, 'failed', MAX_ATTEMPTS);
+      updateBatchStatus(projectRoot, 'analyze', batch.id, 'failed', orchestrator.maxAttempts);
       failedCount++;
     }
   }

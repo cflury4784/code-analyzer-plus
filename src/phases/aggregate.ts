@@ -2,16 +2,15 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { readManifest, updatePhaseStatus } from '../manifest.js';
 import { callLMStudio } from '../lm-studio.js';
-import { withRetry } from '../retry.js';
 import { aggregatePrompt } from '../prompts/templates.js';
 import type { Logger } from '../logger.js';
 import type { DedupOutput } from '../types.js';
 import { calculateSafeMaxTokens } from '../utils.js';
-
-const MAX_ATTEMPTS = 3;
+import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const DEFAULT_NUM_CTX = 32000;
 
 export async function runAggregatePhase(
+  orchestrator: PhaseOrchestrator,
   projectRoot: string,
   model: string,
   logger: Logger,
@@ -45,7 +44,7 @@ export async function runAggregatePhase(
     readFileSync(join(projectRoot, 'code-analysis', 'dedup', 'findings.json'), 'utf8')
   );
 
-  const result = await withRetry(
+  const result = await orchestrator.runWithRetry(
     async () => {
       const prompt = aggregatePrompt(deduped);
       const ctx = numCtx ?? DEFAULT_NUM_CTX;
@@ -64,12 +63,10 @@ export async function runAggregatePhase(
       writeFileSync(refPath, refMatch[1].trim(), 'utf8');
       return true;
     },
-    MAX_ATTEMPTS,
     (attempt, err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error(`Phase 3 failed (attempt ${attempt}/${MAX_ATTEMPTS})`, { error: msg });
+      logger.error(`Phase 3 failed (attempt ${attempt}/${orchestrator.maxAttempts})`, { error: msg });
     },
-    signal,
   );
 
   if (result) {

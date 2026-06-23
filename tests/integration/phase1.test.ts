@@ -8,6 +8,7 @@ import { discoverFiles } from '../../src/discovery.js';
 import { createManifest, writeManifest, readManifest } from '../../src/manifest.js';
 import { createBatches } from '../../src/batcher.js';
 import { runIndexPhase } from '../../src/phases/index.js';
+import { PhaseOrchestrator } from '../../src/phase-orchestrator.js';
 import { createLogger } from '../../src/logger.js';
 
 const MOCK_INDEX_ITEM = {
@@ -59,7 +60,8 @@ describe('runIndexPhase', () => {
     setupProject();
     const logger = createLogger(join(testRoot, 'code-analysis', 'logs', 'run.log'));
 
-    await runIndexPhase(testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
+    const orchestrator = new PhaseOrchestrator(testRoot, logger);
+    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
 
     const manifest = readManifest(testRoot);
     expect(manifest.phases.index).toBe('completed');
@@ -85,7 +87,8 @@ describe('runIndexPhase', () => {
     writeManifest(testRoot, manifest);
 
     const logger = createLogger(join(testRoot, 'code-analysis', 'logs', 'run.log'));
-    await runIndexPhase(testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
+    const orchestrator = new PhaseOrchestrator(testRoot, logger);
+    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
 
     expect(callCount).toBe(0);
   });
@@ -97,7 +100,8 @@ describe('runIndexPhase', () => {
     );
 
     const logger = createLogger(join(testRoot, 'code-analysis', 'logs', 'run.log'));
-    await runIndexPhase(testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
+    const orchestrator = new PhaseOrchestrator(testRoot, logger);
+    await runIndexPhase(orchestrator, testRoot, 'qwen/qwen3.5-9b', logger, LM_URL);
 
     expect(readManifest(testRoot).phases.index).toBe('failed');
   }, 15000);
