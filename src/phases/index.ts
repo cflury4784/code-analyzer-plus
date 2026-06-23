@@ -1,5 +1,3 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
 import { readManifest, updateBatchStatus, updatePhaseStatus } from '../manifest.js';
 import { callLMStudio } from '../lm-studio.js';
 import { indexPrompt } from '../prompts/templates.js';
@@ -7,6 +5,7 @@ import { getFileStructure } from '../gitnexus.js';
 import type { Logger } from '../logger.js';
 import type { IndexOutput } from '../types.js';
 import type { GitNexusContext } from '../gitnexus.js';
+import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 
 function extractJsonArray(raw: string): string {
@@ -110,6 +109,7 @@ export async function runIndexPhase(
   projectRoot: string,
   model: string,
   logger: Logger,
+  fs: FileSystemService,
   lmUrl?: string,
   timeoutMs?: number,
   numCtx?: number,
@@ -129,14 +129,14 @@ export async function runIndexPhase(
     if (batch.status === 'completed') continue;
 
     const fileContents = batch.files
-      .filter(path => {
-        if (existsSync(join(projectRoot, path))) return true;
-        logger.warn(`${batch.id} skipping missing file`, { path });
+      .filter(filePath => {
+        if (fs.existsSync(fs.join(projectRoot, filePath))) return true;
+        logger.warn(`${batch.id} skipping missing file`, { path: filePath });
         return false;
       })
-      .map(path => ({
-        path,
-        content: readFileSync(join(projectRoot, path), 'utf8'),
+      .map(filePath => ({
+        path: filePath,
+        content: fs.readFileSync(fs.join(projectRoot, filePath)),
       }));
 
     if (fileContents.length === 0) {
@@ -182,8 +182,8 @@ export async function runIndexPhase(
           } as IndexOutput;
         });
 
-        mkdirSync(join(projectRoot, 'code-analysis', 'index'), { recursive: true });
-        writeFileSync(join(projectRoot, batch.output_file), JSON.stringify(enriched, null, 2), 'utf8');
+        fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'index'));
+        fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(enriched, null, 2));
         return enriched;
       },
       (attempt, err) => {

@@ -1,5 +1,3 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
 import { readManifest, writeManifest, updateBatchStatus, updatePhaseStatus } from '../manifest.js';
 import { callLMStudio } from '../lm-studio.js';
 import { analyzePrompt } from '../prompts/templates.js';
@@ -8,12 +6,14 @@ import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, IndexOutput } from '../types.js';
 import type { GitNexusContext } from '../gitnexus.js';
 import { calculateSafeMaxTokens } from '../utils.js';
+import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const MAX_GROUP_BYTES = 20000;
 const DEFAULT_NUM_CTX = 32000;
 
 async function groupIndexOutputs(
   projectRoot: string,
+  fs: FileSystemService,
   gitNexusCtx?: GitNexusContext | null,
 ): Promise<{ batches: BatchEntry[]; groups: IndexOutput[][] }> {
   const manifest = readManifest(projectRoot);
@@ -21,7 +21,7 @@ async function groupIndexOutputs(
 
   for (const batch of manifest.batches.index) {
     if (batch.status === 'completed') {
-      const raw = JSON.parse(readFileSync(join(projectRoot, batch.output_file), 'utf8'));
+      const raw = JSON.parse(fs.readFileSync(fs.join(projectRoot, batch.output_file)));
       const items = Array.isArray(raw) ? raw as IndexOutput[] : [raw as IndexOutput];
       allItems.push(...items);
     }
@@ -149,6 +149,7 @@ export async function runAnalyzePhase(
   projectRoot: string,
   model: string,
   logger: Logger,
+  fs: FileSystemService,
   lmUrl?: string,
   timeoutMs?: number,
   numCtx?: number,
@@ -161,7 +162,7 @@ export async function runAnalyzePhase(
     manifest.batches.analyze.every(b => b.status !== 'completed');
 
   // Single call -> reuse batches for manifest and groups for processing
-  const { batches: computedBatches, groups } = await groupIndexOutputs(projectRoot, gitNexusCtx);
+  const { batches: computedBatches, groups } = await groupIndexOutputs(projectRoot, fs, gitNexusCtx);
 
   if (noAnalyzeProgress) {
     manifest.batches.analyze = computedBatches;
@@ -186,8 +187,8 @@ export async function runAnalyzePhase(
         const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 3000);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
         const parsed = JSON.parse(raw) as AnalysisOutput;
-        mkdirSync(join(projectRoot, 'code-analysis', 'analyzer'), { recursive: true });
-        writeFileSync(join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2), 'utf8');
+        fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'analyzer'));
+        fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2));
         return parsed;
       },
       (attempt, err) => {

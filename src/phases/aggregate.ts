@@ -1,11 +1,10 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
 import { readManifest, updatePhaseStatus } from '../manifest.js';
 import { callLMStudio } from '../lm-studio.js';
 import { aggregatePrompt } from '../prompts/templates.js';
 import type { Logger } from '../logger.js';
 import type { DedupOutput } from '../types.js';
 import { calculateSafeMaxTokens } from '../utils.js';
+import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const DEFAULT_NUM_CTX = 32000;
 
@@ -14,6 +13,7 @@ export async function runAggregatePhase(
   projectRoot: string,
   model: string,
   logger: Logger,
+  fs: FileSystemService,
   lmUrl?: string,
   timeoutMs?: number,
   numCtx?: number,
@@ -30,9 +30,9 @@ export async function runAggregatePhase(
     throw new Error('Phase 2.5 (dedup) must complete before Phase 3 (aggregate)');
   }
 
-  const stdPath = join(projectRoot, 'code-analysis', 'aggregate', 'standards.md');
-  const refPath = join(projectRoot, 'code-analysis', 'aggregate', 'refactor-strategy.md');
-  if (existsSync(stdPath) && existsSync(refPath)) {
+  const stdPath = fs.join(projectRoot, 'code-analysis', 'aggregate', 'standards.md');
+  const refPath = fs.join(projectRoot, 'code-analysis', 'aggregate', 'refactor-strategy.md');
+  if (fs.existsSync(stdPath) && fs.existsSync(refPath)) {
     updatePhaseStatus(projectRoot, 'aggregate', 'completed');
     logger.info('Phase 3 already written — skipping LM call');
     return;
@@ -41,7 +41,7 @@ export async function runAggregatePhase(
   logger.info('Phase 3 — Aggregate', { model });
 
   const deduped: DedupOutput = JSON.parse(
-    readFileSync(join(projectRoot, 'code-analysis', 'dedup', 'findings.json'), 'utf8')
+    fs.readFileSync(fs.join(projectRoot, 'code-analysis', 'dedup', 'findings.json'))
   );
 
   const result = await orchestrator.runWithRetry(
@@ -58,9 +58,9 @@ export async function runAggregatePhase(
         throw new Error(`aggregate response missing expected sections — got: ${combined.slice(0, 200)}`);
       }
 
-      mkdirSync(join(projectRoot, 'code-analysis', 'aggregate'), { recursive: true });
-      writeFileSync(stdPath, stdMatch[1].trim(), 'utf8');
-      writeFileSync(refPath, refMatch[1].trim(), 'utf8');
+        fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'aggregate'));
+        fs.writeFileSync(stdPath, stdMatch[1].trim());
+        fs.writeFileSync(refPath, refMatch[1].trim());
       return true;
     },
     (attempt, err) => {

@@ -11,6 +11,7 @@ import { runAnalyzePhase } from './phases/analyze.js';
 import { runDedupPhase } from './phases/dedup.js';
 import { runAggregatePhase } from './phases/aggregate.js';
 import { discoverFiles } from './discovery.js';
+import { NodeFileSystemService } from './fs-service.js';
 import type { Logger } from './logger.js';
 import type { Phase, PhaseStatus } from './types.js';
 import type { GitNexusContext } from './gitnexus.js';
@@ -22,6 +23,7 @@ export type PipelineOptions = _PipelineOptions;
 class PhaseOrchestratorImpl implements _PhaseOrchestrator {
   private readonly projectRoot: string;
   private readonly logger: Logger;
+  private readonly fs: NodeFileSystemService;
   public readonly maxAttempts: number;
   private readonly signal: AbortSignal | undefined;
 
@@ -35,6 +37,7 @@ class PhaseOrchestratorImpl implements _PhaseOrchestrator {
     this.logger = logger;
     this.maxAttempts = maxAttempts;
     this.signal = signal;
+    this.fs = new NodeFileSystemService();
   }
 
   async runWithRetry<T>(
@@ -76,7 +79,7 @@ class PhaseOrchestratorImpl implements _PhaseOrchestrator {
       const m = readManifest(this.projectRoot);
       if (m.phases.index !== 'completed') {
         const resolvedModel = await resolveLoadedIdentifier(model, numCtx, this.logger, { readOnly: skipPreflight });
-        await runIndexPhase(this, this.projectRoot, resolvedModel, this.logger, undefined, timeoutMs, numCtx, this.signal, gitNexusCtx);
+        await runIndexPhase(this, this.projectRoot, resolvedModel, this.logger, this.fs, undefined, timeoutMs, numCtx, this.signal, gitNexusCtx);
       }
       if (readManifest(this.projectRoot).phases.index === 'failed') {
         this.logger.error('Phase 1 failed — halting'); process.exit(1);
@@ -87,7 +90,7 @@ class PhaseOrchestratorImpl implements _PhaseOrchestrator {
       const m = readManifest(this.projectRoot);
       if (m.phases.analyze !== 'completed') {
         const resolvedModel = await resolveLoadedIdentifier(model, numCtx, this.logger, { readOnly: skipPreflight });
-        await runAnalyzePhase(this, this.projectRoot, resolvedModel, this.logger, undefined, timeoutMs, numCtx, this.signal, gitNexusCtx);
+        await runAnalyzePhase(this, this.projectRoot, resolvedModel, this.logger, this.fs, undefined, timeoutMs, numCtx, this.signal, gitNexusCtx);
       }
       if (readManifest(this.projectRoot).phases.analyze === 'failed') {
         this.logger.error('Phase 2 failed — halting'); process.exit(1);
@@ -98,7 +101,7 @@ class PhaseOrchestratorImpl implements _PhaseOrchestrator {
       const m = readManifest(this.projectRoot);
       if (m.phases.dedup !== 'completed') {
         const resolvedModel = await resolveLoadedIdentifier(model, numCtx, this.logger, { readOnly: skipPreflight });
-        await runDedupPhase(this, this.projectRoot, resolvedModel, this.logger, undefined, timeoutMs, numCtx, this.signal);
+        await runDedupPhase(this, this.projectRoot, resolvedModel, this.logger, this.fs, undefined, timeoutMs, numCtx, this.signal);
       }
       if (readManifest(this.projectRoot).phases.dedup === 'failed') {
         this.logger.error('Phase 2.5 failed — halting'); process.exit(1);
@@ -109,7 +112,7 @@ class PhaseOrchestratorImpl implements _PhaseOrchestrator {
       const m = readManifest(this.projectRoot);
       if (m.phases.aggregate !== 'completed') {
         const resolvedModel = await resolveLoadedIdentifier(model, numCtx, this.logger, { readOnly: skipPreflight });
-        await runAggregatePhase(this, this.projectRoot, resolvedModel, this.logger, undefined, timeoutMs, numCtx, this.signal);
+        await runAggregatePhase(this, this.projectRoot, resolvedModel, this.logger, this.fs, undefined, timeoutMs, numCtx, this.signal);
       }
       if (readManifest(this.projectRoot).phases.aggregate === 'failed') {
         this.logger.error('Phase 3 failed — halting'); process.exit(1);

@@ -1,10 +1,9 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
 import { readManifest, writeManifest, updateBatchStatus, updatePhaseStatus } from '../manifest.js';
 import { callLMStudio } from '../lm-studio.js';
 import { deduplicatePromptPassA, deduplicatePromptPassB } from '../prompts/templates.js';
 import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, DedupOutput } from '../types.js';
+import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const MAX_GROUP_BYTES = 12000;  // smaller batches → smaller output → less truncation risk
 const DEFAULT_NUM_CTX = 32000;
@@ -16,13 +15,13 @@ function safeMaxTokens(promptLen: number, numCtx: number, cap: number): number {
   return Math.max(500, Math.min(available, cap));
 }
 
-function buildDedupBatches(projectRoot: string): { batches: BatchEntry[]; passAGroups: AnalysisOutput[][] } {
+function buildDedupBatches(projectRoot: string, fs: FileSystemService): { batches: BatchEntry[]; passAGroups: AnalysisOutput[][] } {
   const manifest = readManifest(projectRoot);
   const allGroups: AnalysisOutput[] = [];
 
   for (const batch of manifest.batches.analyze) {
     if (batch.status === 'completed') {
-      allGroups.push(JSON.parse(readFileSync(join(projectRoot, batch.output_file), 'utf8')) as AnalysisOutput);
+      allGroups.push(JSON.parse(fs.readFileSync(fs.join(projectRoot, batch.output_file))) as AnalysisOutput);
     }
   }
 
@@ -61,6 +60,7 @@ export async function runDedupPhase(
   projectRoot: string,
   model: string,
   logger: Logger,
+  fs: FileSystemService,
   lmUrl?: string,
   timeoutMs?: number,
   numCtx?: number,
@@ -75,7 +75,7 @@ export async function runDedupPhase(
 
   // Pass A: batch dedup
   let m = readManifest(projectRoot);
-  const { batches: computedBatches, passAGroups } = buildDedupBatches(projectRoot);
+  const { batches: computedBatches, passAGroups } = buildDedupBatches(projectRoot, fs);
   const noDedupProgress = m.batches.dedup.length === 0 ||
     m.batches.dedup.every(b => b.status !== 'completed');
   if (noDedupProgress) {
@@ -102,8 +102,8 @@ export async function runDedupPhase(
         const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
         const parsed = JSON.parse(raw) as DedupOutput;
-        mkdirSync(join(projectRoot, 'code-analysis', 'dedup'), { recursive: true });
-        writeFileSync(join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2), 'utf8');
+        fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'dedup'));
+        fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2));
         return parsed;
       },
       (attempt, err) => {
@@ -130,8 +130,8 @@ export async function runDedupPhase(
 
   // Pass B: hierarchical pair-merge until one result remains
   logger.info('Phase 2.5 Pass B — merging partials');
-  const findingsPath = join(projectRoot, 'code-analysis', 'dedup', 'findings.json');
-  if (existsSync(findingsPath)) {
+  const findingsPath = fs.join(projectRoot, 'code-analysis', 'dedup', 'findings.json');
+  if (fs.existsSync(findingsPath)) {
     updatePhaseStatus(projectRoot, 'dedup', 'completed');
     logger.info('Phase 2.5 Pass B already written — skipping LM call');
     return;
@@ -140,7 +140,7 @@ export async function runDedupPhase(
   const afterPassA = readManifest(projectRoot);
   let pool: DedupOutput[] = afterPassA.batches.dedup
     .filter(b => b.status === 'completed')
-    .map(b => JSON.parse(readFileSync(join(projectRoot, b.output_file), 'utf8')) as DedupOutput);
+    .map(b => JSON.parse(fs.readFileSync(fs.join(projectRoot, b.output_file))) as DedupOutput);
 
   let round = 0;
   while (pool.length > 1) {
@@ -172,8 +172,8 @@ export async function runDedupPhase(
     logger.info(`Pass B round ${round} done`, { remaining: pool.length });
   }
 
-  mkdirSync(join(projectRoot, 'code-analysis', 'dedup'), { recursive: true });
-  writeFileSync(findingsPath, JSON.stringify(pool[0], null, 2), 'utf8');
+  fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'dedup'));
+  fs.writeFileSync(findingsPath, JSON.stringify(pool[0], null, 2));
   updatePhaseStatus(projectRoot, 'dedup', 'completed');
   logger.info('Phase 2.5 completed');
 }
