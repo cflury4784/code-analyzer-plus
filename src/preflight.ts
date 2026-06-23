@@ -4,6 +4,7 @@ import { MODEL_REGISTRY, type ModelSpec, FREE_FLOOR_GB, ESTIMATE_MARGIN_GB } fro
 import { lmsRest as defaultLms } from './lms-rest.js';
 import type { Lms } from './lms.js';
 import type { Logger } from './logger.js';
+import { createPlatformAdapter, type PlatformAdapter } from './platform-adapter.js';
 
 export class InsufficientResourcesError extends Error {
   constructor(message: string) {
@@ -14,11 +15,11 @@ export class InsufficientResourcesError extends Error {
 
 /**
  * Query total GPU VRAM in GiB. Tries nvidia-smi first (fast, NVIDIA-only), then falls back to
- * DXGI via PowerShell (cross-vendor, Windows). Returns 0 if both fail.
+ * platform-specific probe. Returns 0 if both fail.
  * WMI AdapterRAM is intentionally avoided — it's a uint32 field and silently wraps for >4 GB VRAM.
  */
-async function queryGpuVramGB(): Promise<number> {
-  // Fast path: NVIDIA
+async function queryGpuVramGB(platform: PlatformAdapter): Promise<number> {
+  // NVIDIA fast path (cross-platform — fails gracefully on non-NVIDIA machines)
   const nv = spawnSync('nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits', [], {
     encoding: 'utf8', shell: true, timeout: 5000,
   });
@@ -28,64 +29,8 @@ async function queryGpuVramGB(): Promise<number> {
       .reduce((a, b) => a + b, 0);
     if (mib > 0) return mib / 1024;
   }
-
-  // Cross-vendor fallback: DXGI via PowerShell (64-bit DedicatedVideoMemory, works on AMD/Intel)
-  // Uses EncodedCommand to avoid heredoc quoting issues in spawnSync.
-  // C# targeting ≤ v6 (Add-Type default): no inline out declarations, no where T:Delegate.
-  const cs = [
-    'using System;',
-    'using System.Runtime.InteropServices;',
-    'public static class DxgiMem {',
-    '    [DllImport("dxgi.dll")] public static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr f);',
-    '    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
-    '    public struct Desc1 {',
-    '        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string Description;',
-    '        public uint VendorId,DeviceId,SubSysId,Revision;',
-    '        public ulong DedicatedVideoMemory,DedicatedSystemMemory,SharedSystemMemory;',
-    '        public long Luid; public uint Flags;',
-    '    }',
-    '    [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate uint RelFn(IntPtr t);',
-    '    [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int Enum1Fn(IntPtr t,uint i,out IntPtr a);',
-    '    [UnmanagedFunctionPointer(CallingConvention.StdCall)] public delegate int GetDesc1Fn(IntPtr t,out Desc1 d);',
-    '    static IntPtr VtblSlot(IntPtr o,int s){return Marshal.ReadIntPtr(Marshal.ReadIntPtr(o),s*IntPtr.Size);}',
-    '    public static long TotalDedicatedVideoBytes() {',
-    '        var iid=new Guid("770aae78-f26f-4dba-a829-253c83d1b387");',
-    '        IntPtr pF;',
-    '        if(CreateDXGIFactory1(ref iid,out pF)<0) return 0;',
-    '        try {',
-    '            long tot=0;',
-    '            var en=(Enum1Fn)Marshal.GetDelegateForFunctionPointer(VtblSlot(pF,12),typeof(Enum1Fn));',
-    '            for(uint i=0;;i++){',
-    '                IntPtr pA;',
-    '                if(en(pF,i,out pA)!=0)break;',
-    '                try{',
-    '                    var gd=(GetDesc1Fn)Marshal.GetDelegateForFunctionPointer(VtblSlot(pA,11),typeof(GetDesc1Fn));',
-    '                    Desc1 d;',
-    '                    if(gd(pA,out d)==0)tot+=(long)d.DedicatedVideoMemory;',
-    '                }finally{',
-    '                    ((RelFn)Marshal.GetDelegateForFunctionPointer(VtblSlot(pA,2),typeof(RelFn)))(pA);',
-    '                }',
-    '            }',
-    '            return tot;',
-    '        } finally{',
-    '            ((RelFn)Marshal.GetDelegateForFunctionPointer(VtblSlot(pF,2),typeof(RelFn)))(pF);',
-    '        }',
-    '    }',
-    '}',
-  ].join('\r\n');
-
-  // PowerShell heredoc requires CRLF; closing '@  must be at column 0 — preserved by join above.
-  const ps1 = `Add-Type -TypeDefinition @'\r\n${cs}\r\n'@\r\n[DxgiMem]::TotalDedicatedVideoBytes()`;
-  const encoded = Buffer.from(ps1, 'utf16le').toString('base64');
-  const pw = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
-    encoding: 'utf8', timeout: 15000,
-  });
-  if (pw.status === 0 && pw.stdout?.trim()) {
-    const bytes = parseInt(pw.stdout.trim(), 10);
-    if (!isNaN(bytes) && bytes > 0) return bytes / 1024 ** 3;
-  }
-
-  return 0;
+  // Platform-specific fallback (DXGI on win32, no-op on posix)
+  return platform.queryGpuVramGbFallback();
 }
 
 export interface PreflightDeps {
@@ -93,13 +38,17 @@ export interface PreflightDeps {
   totalmem: () => number;
   freemem: () => number;
   gpuVramGB?: () => Promise<number>;
+  platform: PlatformAdapter;
 }
+
+const defaultAdapter = createPlatformAdapter();
 
 const defaultDeps: PreflightDeps = {
   lms: defaultLms,
   totalmem: osTotalmem,
   freemem: osFreemem,
-  gpuVramGB: queryGpuVramGB,
+  gpuVramGB: () => queryGpuVramGB(defaultAdapter),
+  platform: defaultAdapter,
 };
 
 const toGiB = (bytes: number): number => bytes / 1024 ** 3;

@@ -7,6 +7,7 @@ import {
 } from '../src/preflight.js';
 import { type Lms } from '../src/lms.js';
 import type { Logger } from '../src/logger.js';
+import { PosixPlatformAdapter } from '../src/platform-adapter.js';
 
 const GiB = 1024 ** 3;
 const noopLogger: Logger = { info: () => {}, error: () => {}, warn: () => {}, debug: () => {} };
@@ -25,7 +26,7 @@ function makeLms(overrides: Partial<Lms> = {}, calls: string[] = []): Lms {
 }
 
 function makeDeps(lms: Lms, totalGiB = 31.15, freeGiB = 21.6): PreflightDeps {
-  return { lms, totalmem: () => totalGiB * GiB, freemem: () => freeGiB * GiB };
+  return { lms, totalmem: () => totalGiB * GiB, freemem: () => freeGiB * GiB, platform: new PosixPlatformAdapter() };
 }
 
 const M = 'qwen3.6-35b-a3b';

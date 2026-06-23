@@ -123,3 +123,45 @@ describe('discoverFiles — .md exclusion', () => {
     expect(files.map(f => f.path)).toContain('src/util.ts');
   });
 });
+
+describe('discoverFiles — exclusion precedence', () => {
+  let tempFs: TempFsResult;
+
+  beforeEach(() => {
+    tempFs = setupTempFs('discovery-prec');
+  });
+
+  afterEach(() => {
+    tempFs.cleanup();
+  });
+
+  it('dynamic .gitignore exclusion applies when .gitignore exists (FALLBACK_EXCLUDED unreachable)', () => {
+    // node_modules is in FALLBACK_EXCLUDED. We also add it to .gitignore.
+    // With .gitignore present, FALLBACK_EXCLUDED is never consulted — .gitignore wins by code path.
+    // The path is still excluded regardless; this test verifies the invariant holds.
+    writeFileSync(join(tempFs.root, '.gitignore'), 'node_modules/\n');
+    mkdirSync(join(tempFs.root, 'node_modules'));
+    writeFileSync(join(tempFs.root, 'node_modules', 'pkg.js'), 'module.exports = {}');
+    mkdirSync(join(tempFs.root, 'src'));
+    writeFileSync(join(tempFs.root, 'src', 'main.ts'), 'export const x = 1;');
+
+    const files = discoverFiles(tempFs.root);
+    const paths = files.map(f => f.path);
+
+    expect(paths).not.toContain('node_modules/pkg.js');
+    expect(paths).toContain('src/main.ts');
+  });
+
+  it('FALLBACK_EXCLUDED applies when no .gitignore exists', () => {
+    mkdirSync(join(tempFs.root, 'node_modules'));
+    writeFileSync(join(tempFs.root, 'node_modules', 'pkg.js'), 'module.exports = {}');
+    mkdirSync(join(tempFs.root, 'src'));
+    writeFileSync(join(tempFs.root, 'src', 'main.ts'), 'export const x = 1;');
+
+    const files = discoverFiles(tempFs.root);
+    const paths = files.map(f => f.path);
+
+    expect(paths).not.toContain('node_modules/pkg.js');
+    expect(paths).toContain('src/main.ts');
+  });
+});

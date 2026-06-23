@@ -52,6 +52,12 @@ function isExcludedFile(name: string): boolean {
 }
 
 export function discoverFiles(projectRoot: string): FileEntry[] {
+  // Exclusion precedence (mutually exclusive code paths — no conflict possible):
+  //   1. ALWAYS_EXCLUDED: applied first, unconditionally, before any .gitignore or fallback check.
+  //   2. .gitignore (dynamic): if a .gitignore exists, buildIgnore returns an ignore instance and
+  //      FALLBACK_EXCLUDED is never consulted for directory skipping (ig !== null branch below).
+  //   3. FALLBACK_EXCLUDED (static): used only when no .gitignore exists (ig === null).
+  //      Dynamic (.gitignore) always wins because the two paths are mutually exclusive.
   const ig = buildIgnore(projectRoot);
   const results: FileEntry[] = [];
 
@@ -64,8 +70,10 @@ export function discoverFiles(projectRoot: string): FileEntry[] {
 
       if (entry.isDirectory()) {
         if (ig !== null) {
+          // .gitignore present — dynamic exclusion; FALLBACK_EXCLUDED unreachable here.
           if (ig.ignores(relPath + '/')) continue;
         } else {
+          // No .gitignore — use static fallback.
           if (FALLBACK_EXCLUDED.has(entry.name)) continue;
         }
         walk(full);
