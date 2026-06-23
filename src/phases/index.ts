@@ -2,107 +2,12 @@ import { readManifest, updateBatchStatus, updatePhaseStatus } from '../manifest.
 import { callLMStudio } from '../lm-studio.js';
 import { indexPrompt } from '../prompts/templates.js';
 import { getFileStructure } from '../gitnexus.js';
+import { extractJson } from '../utils/index.js';
 import type { Logger } from '../logger.js';
 import type { IndexOutput } from '../types.js';
 import type { GitNexusContext } from '../gitnexus.js';
 import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
-
-function extractJsonArray(raw: string): string {
-  const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-  const start = stripped.indexOf('[');
-  if (start === -1) throw new Error('no JSON array found in model response');
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < stripped.length; i++) {
-    const ch = stripped[i];
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (ch === '\\') {
-      escape = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (ch === '[') depth++;
-    else if (ch === ']') {
-      depth--;
-      if (depth === 0) {
-        return stripped.slice(start, i + 1);
-      }
-    }
-  }
-  throw new Error('no JSON array found in model response');
-}
-
-function extractJsonFromResponse(raw: string): string {
-  // Try the full response first (after cleaning code fences)
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-  try {
-    JSON.parse(cleaned);
-    return cleaned;
-  } catch { /* fall through */ }
-
-  // Try extracting a JSON array
-  const start = cleaned.indexOf('[');
-  if (start !== -1) {
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    for (let i = start; i < cleaned.length; i++) {
-      const ch = cleaned[i];
-      if (escape) { escape = false; continue; }
-      if (ch === '\\') { escape = true; continue; }
-      if (ch === '"') { inString = !inString; continue; }
-      if (inString) continue;
-      if (ch === '[') depth++;
-      else if (ch === ']') {
-        depth--;
-        if (depth === 0) {
-          const slice = cleaned.slice(start, i + 1);
-          try {
-            JSON.parse(slice);
-            return slice;
-          } catch { /* fall through */ }
-        }
-      }
-    }
-  }
-
-  // Try extracting a JSON object
-  const oStart = cleaned.indexOf('{');
-  if (oStart !== -1) {
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    for (let i = oStart; i < cleaned.length; i++) {
-      const ch = cleaned[i];
-      if (escape) { escape = false; continue; }
-      if (ch === '\\') { escape = true; continue; }
-      if (ch === '"') { inString = !inString; continue; }
-      if (inString) continue;
-      if (ch === '{') depth++;
-      else if (ch === '}') {
-        depth--;
-        if (depth === 0) {
-          const slice = cleaned.slice(oStart, i + 1);
-          try {
-            JSON.parse(slice);
-            return slice;
-          } catch { /* fall through */ }
-        }
-      }
-    }
-  }
-
-  throw new Error('no valid JSON found in model response');
-}
 
 export async function runIndexPhase(
   orchestrator: PhaseOrchestrator,
@@ -161,7 +66,7 @@ export async function runIndexPhase(
     const result = await orchestrator.runWithRetry(
       async () => {
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, 1500);
-        const parsed = JSON.parse(extractJsonArray(raw)) as Partial<IndexOutput>[];
+        const parsed = extractJson(raw) as Partial<IndexOutput>[];
 
         // Guard: model sometimes returns a flat string[] (e.g. just the responsibilities
         // array) instead of an IndexOutput[]. Throwing here lets the orchestrator retry the batch.

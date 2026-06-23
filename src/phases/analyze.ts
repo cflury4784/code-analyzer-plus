@@ -6,6 +6,7 @@ import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, IndexOutput } from '../types.js';
 import type { GitNexusContext } from '../gitnexus.js';
 import { calculateSafeMaxTokens } from '../utils.js';
+import { extractJson } from '../utils/index.js';
 import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const MAX_GROUP_BYTES = 20000;
@@ -186,7 +187,7 @@ export async function runAnalyzePhase(
         const prompt = analyzePrompt(groupItems);
         const maxTokens = calculateSafeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, 3000);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
-        const parsed = JSON.parse(raw) as AnalysisOutput;
+        const parsed = extractJson(raw) as AnalysisOutput;
         fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'analyzer'));
         fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2));
         return parsed;

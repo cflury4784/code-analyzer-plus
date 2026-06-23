@@ -3,6 +3,7 @@ import { callLMStudio } from '../lm-studio.js';
 import { deduplicatePromptPassA, deduplicatePromptPassB } from '../prompts/templates.js';
 import type { Logger } from '../logger.js';
 import type { AnalysisOutput, BatchEntry, DedupOutput } from '../types.js';
+import { extractJson } from '../utils/index.js';
 import type { FileSystemService } from '../fs-service.js';
 import type { PhaseOrchestrator } from '../phase-orchestrator-types.js';
 const MAX_GROUP_BYTES = 12000;  // smaller batches → smaller output → less truncation risk
@@ -101,7 +102,7 @@ export async function runDedupPhase(
         const prompt = deduplicatePromptPassA(groupItems);
         const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
         const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
-        const parsed = JSON.parse(raw) as DedupOutput;
+        const parsed = extractJson(raw) as DedupOutput;
         fs.mkdirSync(fs.join(projectRoot, 'code-analysis', 'dedup'));
         fs.writeFileSync(fs.join(projectRoot, batch.output_file), JSON.stringify(parsed, null, 2));
         return parsed;
@@ -154,7 +155,7 @@ export async function runDedupPhase(
           const prompt = deduplicatePromptPassB(chunk);
           const maxTokens = safeMaxTokens(prompt.length, numCtx ?? DEFAULT_NUM_CTX, MAX_OUTPUT_TOKENS);
           const raw = await callLMStudio(model, prompt, lmUrl, timeoutMs, numCtx, signal, maxTokens);
-          return JSON.parse(raw) as DedupOutput;
+          return extractJson(raw) as DedupOutput;
         },
         (attempt, err) => {
           const msg = err instanceof Error ? err.message : String(err);
