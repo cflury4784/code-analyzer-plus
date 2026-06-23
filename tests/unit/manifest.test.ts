@@ -13,6 +13,7 @@ import {
 } from '../../src/manifest.js';
 import type { FileEntry } from '../../src/types.js';
 import { setupTempFs, type TempFsResult } from '../utils/TestEnvironmentManager.js';
+import { createTestManifestFixture } from '../utils/fixtures.js';
 
 let testRoot: string;
 let tempFs: TempFsResult;
@@ -64,11 +65,7 @@ describe('writeManifest / readManifest', () => {
 describe('updateBatchStatus', () => {
   it('marks batch completed and sets completed_at', () => {
     const m = createManifest(testRoot, []);
-    m.batches.index = [{
-      id: 'batch-001', files: [], size_bytes: 0,
-      status: 'pending', attempts: 0, completed_at: null,
-      output_file: 'code-analysis/index/batch-001.json',
-    }];
+    m.batches.index = [createTestManifestFixture()];
     writeManifest(testRoot, m);
 
     updateBatchStatus(testRoot, 'index', 'batch-001', 'completed', 1);
@@ -81,11 +78,7 @@ describe('updateBatchStatus', () => {
 
   it('marks batch failed with null completed_at', () => {
     const m = createManifest(testRoot, []);
-    m.batches.index = [{
-      id: 'batch-001', files: [], size_bytes: 0,
-      status: 'pending', attempts: 0, completed_at: null,
-      output_file: 'code-analysis/index/batch-001.json',
-    }];
+    m.batches.index = [createTestManifestFixture()];
     writeManifest(testRoot, m);
 
     updateBatchStatus(testRoot, 'index', 'batch-001', 'failed', 3);
@@ -109,12 +102,11 @@ describe('resetPhase', () => {
   it('resets phase status and all its batches to pending', () => {
     const m = createManifest(testRoot, []);
     m.phases.index = 'completed';
-    m.batches.index = [{
-      id: 'batch-001', files: [], size_bytes: 0,
-      status: 'completed', attempts: 2,
+    m.batches.index = [createTestManifestFixture({
+      status: 'completed',
+      attempts: 2,
       completed_at: '2026-01-01T00:00:00Z',
-      output_file: 'code-analysis/index/batch-001.json',
-    }];
+    })];
     writeManifest(testRoot, m);
 
     resetPhase(testRoot, 'index');
@@ -159,12 +151,13 @@ describe('resetPhase — dedup', () => {
   it('resets dedup phase status and batches to pending', () => {
     const m = createManifest(testRoot, []);
     m.phases.dedup = 'completed';
-    m.batches.dedup = [{
-      id: 'partial-001', files: [], size_bytes: 0,
-      status: 'completed', attempts: 1,
+    m.batches.dedup = [createTestManifestFixture({
+      id: 'partial-001',
+      status: 'completed',
+      attempts: 1,
       completed_at: '2026-01-01T00:00:00Z',
       output_file: 'code-analysis/dedup/partial-001.json',
-    }];
+    })];
     writeManifest(testRoot, m);
 
     resetPhase(testRoot, 'dedup');

@@ -2,13 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { setupServer } from 'msw/node';
 import { http, HttpResponse } from 'msw';
 import { callLMStudio } from '../../src/lm-studio.js';
-
-function sseResponse(content: string): HttpResponse {
-  const chunk = JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] });
-  return new HttpResponse(`data: ${chunk}\n\ndata: [DONE]\n\n`, {
-    headers: { 'Content-Type': 'text/event-stream' },
-  });
-}
+import { generatePromptFixture } from '../utils/fixtures.js';
 
 const server = setupServer();
 
@@ -19,7 +13,7 @@ afterAll(() => server.close());
 describe('callLMStudio', () => {
   it('returns content string from choices[0].message.content', async () => {
     server.use(
-      http.post('http://localhost:1234/v1/chat/completions', () => sseResponse('{"ok":true}'))
+      http.post('http://localhost:1234/v1/chat/completions', () => generatePromptFixture('{"ok":true}'))
     );
     const result = await callLMStudio('qwen/qwen3.5-9b', 'prompt', 'http://localhost:1234/v1/chat/completions');
     expect(result).toBe('{"ok":true}');
@@ -41,7 +35,7 @@ describe('callLMStudio', () => {
     server.use(
       http.post('http://localhost:1234/v1/chat/completions', async ({ request }) => {
         capturedBody = await request.json();
-        return sseResponse('ok');
+        return generatePromptFixture('ok');
       })
     );
     await callLMStudio('qwen/qwen3.5-9b', 'prompt', 'http://localhost:1234/v1/chat/completions', undefined, 32000);
@@ -56,7 +50,7 @@ describe('callLMStudio', () => {
     server.use(
       http.post('http://localhost:1234/v1/chat/completions', async ({ request }) => {
         capturedBody = await request.json();
-        return sseResponse('ok');
+        return generatePromptFixture('ok');
       })
     );
     await callLMStudio('qwen/qwen3.5-9b', 'prompt', 'http://localhost:1234/v1/chat/completions');

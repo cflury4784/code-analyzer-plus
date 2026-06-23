@@ -12,6 +12,7 @@ import { NodeFileSystemService } from '../../src/fs-service.js';
 import { PhaseOrchestrator } from '../../src/phase-orchestrator.js';
 import { createLogger } from '../../src/logger.js';
 import { setupTempFs, type TempFsResult } from '../utils/TestEnvironmentManager.js';
+import { generatePromptFixture } from '../utils/fixtures.js';
 
 const MOCK_INDEX_ITEM = {
   module: 'src/utils/helper.ts',
@@ -22,13 +23,6 @@ const MOCK_INDEX_ITEM = {
   duplicated_logic_candidates: [],
   inconsistencies: [],
 };
-
-function sseResponse(content: string): HttpResponse {
-  const chunk = JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] });
-  return new HttpResponse(`data: ${chunk}\n\ndata: [DONE]\n\n`, {
-    headers: { 'Content-Type': 'text/event-stream' },
-  });
-}
 
 const LM_URL = 'http://localhost:1234/v1/chat/completions';
 const server = setupServer();
@@ -51,7 +45,7 @@ function setupProject() {
   writeManifest(testRoot, manifest);
 
   server.use(
-    http.post(LM_URL, () => sseResponse(JSON.stringify([MOCK_INDEX_ITEM])))
+    http.post(LM_URL, () => generatePromptFixture(JSON.stringify([MOCK_INDEX_ITEM])))
   );
 }
 
