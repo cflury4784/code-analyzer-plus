@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 
 export interface LoadedModel {
   identifier: string;
@@ -15,37 +15,56 @@ export type RunLms = typeof runLms;
 /** Strip ANSI escape sequences (lms human output may be colored on a TTY). */
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
 
-const MAX_BUFFER = 64 * 1024 * 1024;
-
 /**
- * The single seam that spawns the `lms` binary. Async signature (callers await), but uses
- * spawnSync internally — matches the pattern used throughout this codebase on Windows.
- * `shell: true` lets Windows resolve `lms` whether it is an .exe or a .cmd shim.
- * Throws a labeled Error on missing binary, timeout, or non-zero exit.
+ * Windows .cmd shim note: `shell: true` lets Windows resolve `lms` as either
+ * .exe or .cmd shim (npm global install). The full command is passed as a
+ * single joined string (not args array) to avoid Node.js DEP0190
+ * (shell=true + args array deprecation). This matches the original spawnSync
+ * pattern. The async conversion preserves both constraints.
  */
 export async function runLms(args: string[], opts: RunOpts = {}): Promise<string> {
-  // Pass full command as a string (not args array) to avoid DEP0190.
-  // All lms args are controlled values with no spaces, so join is safe.
-  const res = spawnSync('lms ' + args.join(' '), [], {
-    encoding: 'utf8',
-    maxBuffer: MAX_BUFFER,
-    shell: true,
-    timeout: opts.timeoutMs,
+  return new Promise<string>((resolve, reject) => {
+    const cmd = 'lms ' + args.join(' ');
+    const proc = spawn(cmd, [], { shell: true } as Parameters<typeof spawn>[2]);
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (opts.timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        proc.kill();
+      }, opts.timeoutMs);
+    }
+
+    (proc.stdout as NodeJS.ReadableStream | null)?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+    });
+    (proc.stderr as NodeJS.ReadableStream | null)?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+
+    proc.on('error', (err: NodeJS.ErrnoException) => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (err.code === 'ENOENT') {
+        return reject(new Error('lms binary not found on PATH — is LM Studio CLI installed?'));
+      }
+      reject(new Error(`lms ${args[0] ?? ''} failed: ${err.message}`));
+    });
+
+    proc.on('close', (code: number | null) => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (timedOut) {
+        return reject(new Error(`lms ${args[0] ?? ''} timed out after ${(opts.timeoutMs ?? 0) / 1000}s`));
+      }
+      if (code !== 0) {
+        return reject(new Error(`lms ${args.join(' ')} exited ${code}: ${stderr.trim()}`));
+      }
+      resolve(stdout);
+    });
   });
-  if (res.error) {
-    const e = res.error as NodeJS.ErrnoException;
-    if (e.code === 'ETIMEDOUT') {
-      throw new Error(`lms ${args[0] ?? ''} timed out after ${(opts.timeoutMs ?? 0) / 1000}s`);
-    }
-    if (e.code === 'ENOENT') {
-      throw new Error('lms binary not found on PATH — is LM Studio CLI installed?');
-    }
-    throw new Error(`lms ${args[0] ?? ''} failed: ${e.message}`);
-  }
-  if (res.status !== 0) {
-    throw new Error(`lms ${args.join(' ')} exited ${res.status}: ${(res.stderr || '').trim()}`);
-  }
-  return res.stdout ?? '';
 }
 
 /** Defensive JSON parse with a labeled error and a validator. */
